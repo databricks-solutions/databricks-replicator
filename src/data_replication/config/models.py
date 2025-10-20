@@ -88,35 +88,6 @@ class BackupConfig(BaseModel):
         return v.lower() if v else v
 
 
-# Delta Share support will be enabled in a future release
-# class DeltaShareConfig(BaseModel):
-#     """Configuration for Delta Share operations."""
-
-#     enabled: bool = True
-#     recipient_id: Optional[str] = None
-#     shared_catalog: Optional[str] = '__replication_internal_aaron_to_aws'
-#     share_name: Optional[str] = '__replication_internal_aaron_to_aws'
-#     shared_catalog_name: Optional[str] = '__replication_internal_aaron_from_azure'
-
-#     @model_validator(mode="after")
-#     def validate_deltashare_config(self):
-#         """Validate required fields when delta share is enabled."""
-#         if self.enabled:
-#             required_fields = [
-#                 "recipient_id"
-#             ]
-#             missing_fields = [
-#                 field for field in required_fields if getattr(self, field) is None
-#             ]
-
-#             if missing_fields:
-#                 raise ValueError(
-#                     f"When delta share is enabled, the following fields are "
-#                     f"required: {missing_fields}"
-#                 )
-#         return self
-
-
 class ReplicationConfig(BaseModel):
     """Configuration for replication operations."""
 
@@ -186,7 +157,11 @@ class TargetCatalogConfig(BaseModel):
 
     catalog_name: str
     table_types: List[TableType] = Field(
-        default_factory=lambda: [TableType.MANAGED, TableType.STREAMING_TABLE, TableType.EXTERNAL]
+        default_factory=lambda: [
+            TableType.MANAGED,
+            TableType.STREAMING_TABLE,
+            TableType.EXTERNAL,
+        ]
     )
     schema_filter_expression: Optional[str] = None
     backup_config: Optional[BackupConfig] = None
@@ -204,14 +179,47 @@ class TargetCatalogConfig(BaseModel):
     @model_validator(mode="after")
     def validate_catalog_config(self):
         """
-        Validate that at least one of schema_filter_expression or target_schemas
-        is provided.
+        Validate catalog configuration including streaming table constraints.
         """
         if not self.schema_filter_expression and not self.target_schemas:
             raise ValueError(
                 "At least one of 'schema_filter_expression' or 'target_schemas' "
                 "must be provided"
             )
+
+        # Validate streaming table constraints
+        has_streaming_table = TableType.STREAMING_TABLE in self.table_types
+        has_other_table_types = (
+            len([t for t in self.table_types if t != TableType.STREAMING_TABLE]) > 0
+        )
+
+        # Streaming tables can't be backed up and replicated with other object types
+        if has_streaming_table and has_other_table_types:
+            if (self.backup_config and self.backup_config.enabled) or (
+                self.replication_config and self.replication_config.enabled
+            ):
+                raise ValueError(
+                    "Streaming tables cannot be backed up and replicated with other object types. "
+                    "Use separate catalog configurations for streaming tables."
+                )
+
+        # backup_catalog must be set for streaming tables
+        if has_streaming_table and self.backup_config and self.backup_config.enabled:
+            if not self.backup_config.backup_catalog:
+                raise ValueError(
+                    "backup_catalog must be set when backup is enabled for streaming tables"
+                )
+
+        # backup_catalog should only be set for streaming tables
+        if (
+            not has_streaming_table
+            and self.backup_config
+            and self.backup_config.backup_catalog
+        ):
+            raise ValueError(
+                "backup_catalog should only be set for streaming table configurations"
+            )
+
         return self
 
 

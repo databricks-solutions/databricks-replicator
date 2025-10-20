@@ -87,7 +87,7 @@ class BackupProvider(BaseProvider):
             table_details = self.db_ops.get_table_details(source_table)
             actual_source_table = table_details["table_name"]
             dlt_flag = table_details["is_dlt"]
-            
+
             # Get source table type for audit logging
             source_table_type = self.db_ops.get_table_type(source_table)
 
