@@ -8,11 +8,7 @@ row count validation, and missing data detection between source and target table
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from databricks.connect import DatabricksSession
-
-from ..audit.logger import DataReplicationLogger
-from ..config.models import RetryConfig, RunResult, TargetCatalogConfig
-from ..databricks_operations import DatabricksOperations
+from ..config.models import  RunResult
 from ..exceptions import ReconciliationError, TableNotFoundError
 from ..utils import retry_with_logging
 from .base_provider import BaseProvider
@@ -50,10 +46,27 @@ class ReconciliationProvider(BaseProvider):
     def setup_operation_catalogs(self) -> str:
         """Setup reconciliation-specific catalogs."""
         reconciliation_config = self.catalog_config.reconciliation_config
-        self.db_ops.create_catalog_if_not_exists(
-            reconciliation_config.recon_outputs_catalog
+        self.logger.info(
+            f"""Creating recon result catalog: {reconciliation_config.recon_outputs_catalog} at location: {reconciliation_config.recon_catalog_location}"""
         )
-        self.logger.info(f"Reconciling catalog: {reconciliation_config.source_catalog}")
+        self.db_ops.create_catalog_if_not_exists(
+            reconciliation_config.recon_outputs_catalog,
+            reconciliation_config.recon_catalog_location
+        )
+
+        # Create source catalog from share if needed
+        if reconciliation_config.create_shared_catalog:
+            provider_name = self.db_ops.get_provider_name(
+                self.source_databricks_config.sharing_identifier
+            )
+            self.logger.info(
+                f"""Creating source catalog from share: {reconciliation_config.source_catalog} using share name: {reconciliation_config.share_name}"""
+            )
+            self.db_ops.create_catalog_using_share_if_not_exists(
+                reconciliation_config.source_catalog,
+                provider_name,
+                reconciliation_config.share_name,
+            )        
         return reconciliation_config.source_catalog
 
     def process_schema_concurrently(

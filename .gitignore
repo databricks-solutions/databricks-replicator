@@ -18,3 +18,4 @@ scratch/**
 .claude/
 terraform-exporter/
 terraform-import*/
+.coverage

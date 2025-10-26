@@ -14,8 +14,12 @@ from databricks.connect import DatabricksSession
 
 from ..audit.audit_logger import AuditLogger
 from ..audit.logger import DataReplicationLogger
-from ..config.models import (ReplicationSystemConfig, RunResult, RunSummary,
-                             TargetCatalogConfig)
+from ..config.models import (
+    ReplicationSystemConfig,
+    RunResult,
+    RunSummary,
+    TargetCatalogConfig
+)
 from ..databricks_operations import DatabricksOperations
 
 if TYPE_CHECKING:
@@ -83,6 +87,7 @@ class ProviderFactory:
                     logger=self.logger,
                     run_id=self.run_id,
                     audit_table=self.config.audit_config.audit_table,
+                    audit_catalog_location=self.config.audit_config.audit_catalog_location,
                     config_details=config_dict,
                 )
             except Exception as e:
@@ -107,7 +112,10 @@ class ProviderFactory:
             )
         return False
 
-    def create_provider(self, catalog: TargetCatalogConfig) -> "BaseProvider":
+    def create_provider(
+        self,
+        catalog: TargetCatalogConfig
+    ) -> "BaseProvider":
         """Create a provider instance for the given catalog."""
         # Lazy import to avoid circular imports
         from .base_provider import BaseProvider
@@ -148,6 +156,8 @@ class ProviderFactory:
             self.db_ops,
             self.run_id,
             catalog,
+            self.config.source_databricks_connect_config,
+            self.config.target_databricks_connect_config,
             retry_config,
             max_workers,
             timeout_seconds,

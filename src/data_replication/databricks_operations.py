@@ -27,18 +27,41 @@ class DatabricksOperations:
         """
         self.spark = spark
 
-    def create_catalog_if_not_exists(self, catalog_name: str) -> None:
+    def create_catalog_if_not_exists(self, catalog_name: str, catalog_location: str) -> None:
         """
         Create catalog if it doesn't exist.
 
         Args:
             catalog_name: Name of the catalog to create
+            catalog_location: Location of the catalog
         """
         try:
-            self.spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog_name}")
+            if catalog_location:
+                self.spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog_name} MANAGED LOCATION '{catalog_location}'")
+            else:
+                self.spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog_name}")
         except Exception as e:
-            # Some environments might not support catalog creation
-            print(f"Warning: Could not create catalog {catalog_name}: {e}")
+            raise Exception(f"""Failed to create catalog: {str(e)}""") from e
+
+    def create_catalog_using_share_if_not_exists(
+        self, catalog_name: str, provider_name: str, share_name: str
+    ) -> None:
+        """
+        Create catalog if it doesn't exist.
+
+        Args:
+            catalog_name: Name of the catalog to create
+            provider_name: Name of the provider
+            share_name: Name of the share
+        """
+        try:
+            self.spark.sql(
+                f"CREATE CATALOG IF NOT EXISTS {catalog_name} USING SHARE {provider_name}.{share_name}"
+            )
+        except Exception as e:
+            raise Exception(f"""
+                            Failed to create catalog: {str(e)} using share {provider_name}.{share_name}
+            """) from e
 
     def create_schema_if_not_exists(self, catalog_name: str, schema_name: str) -> None:
         """
@@ -48,8 +71,11 @@ class DatabricksOperations:
             catalog_name: Name of the catalog
             schema_name: Name of the schema to create
         """
-        full_schema = f"{catalog_name}.{schema_name}"
-        self.spark.sql(f"CREATE SCHEMA IF NOT EXISTS {full_schema}")
+        try:
+            full_schema = f"{catalog_name}.{schema_name}"
+            self.spark.sql(f"CREATE SCHEMA IF NOT EXISTS {full_schema}")
+        except Exception as e:
+            raise Exception(f"""Failed to create schema: {str(e)}""") from e
 
     def get_tables_in_schema(self, catalog_name: str, schema_name: str) -> List[str]:
         """
@@ -119,6 +145,20 @@ class DatabricksOperations:
         except Exception:
             # Catalog might not exist or be accessible
             return []
+
+    @retry_with_logging(retry_config=RetryConfig(retries=5, delay=3))
+    def refresh_schema_metadata(self, schema_name: str) -> bool:
+        """
+        Check if a schema exists.
+
+        Args:
+            schema_name: Full schema name (catalog.schema)
+
+        Returns:
+            True if schema exists, False otherwise
+        """
+        # Retry to refresh schema metadata in delta share catalog
+        return self.spark.catalog.databaseExists(schema_name)
 
     def get_schemas_by_filter(
         self, catalog_name: str, filter_expression: str
@@ -230,7 +270,8 @@ class DatabricksOperations:
                 table_type = "STREAMING_TABLE"
                 return table_type
 
-            # when it's Managed, check if it's STREAMING_TABLE as it may be an external table when delta shared
+            # when it's Managed, check if it's STREAMING_TABLE
+            # as it may be an external table when delta shared
             location = (
                 self.spark.sql(f"DESCRIBE DETAIL {table_name}")
                 .collect()[0]
@@ -254,7 +295,7 @@ class DatabricksOperations:
         try:
             self.spark.sql(f"DROP TABLE IF EXISTS {table_name}")
         except Exception as e:
-            print(f"Warning: Could not drop table {table_name}: {e}")
+            raise Exception(f"""Failed to drop table: {str(e)}""") from e
 
     def get_pipeline_id(self, table_name: str) -> str:
         """
@@ -388,3 +429,173 @@ class DatabricksOperations:
         except Exception as e:
             print(f"Warning: Could not get fields for table {table_name}: {e}")
             return []
+
+    def get_recipient_name(self, sharing_identifier: str) -> str:
+        """
+        Get delta share recipient name.
+
+        Returns:
+            recipient_name if exists else None
+        """
+        try:
+            # check if the recipient exists
+            select_sql = f"""SELECT recipient_name FROM
+                    system.information_schema.recipients
+                    WHERE authentication_type = 'DATABRICKS'
+                    AND data_recipient_global_metastore_id = '{sharing_identifier}'
+                    """
+            df = self.spark.sql(select_sql)
+            # return recipient name if exists
+            if not df.isEmpty():
+                return df.collect()[0][0]
+            return None
+
+        except Exception as e:
+            raise Exception(f"""Failed to get recipient name: {str(e)}""") from e
+
+    def create_recipient(self, sharing_identifier: str, recipient_name: str) -> str:
+        """
+        Create delta share recipient.
+
+        Args:
+            sharing_identifier: ID of the recipient to grant permissions to
+            recipient_name: Name of the recipient to grant permissions to
+
+        Returns:
+            Name of the created or existing recipient
+
+        Raises:
+            Exception: If recipient creation fails
+        """
+        try:
+            # return recipient name if exists
+            existing_recipient = self.get_recipient_name(sharing_identifier)
+            if existing_recipient:
+                return existing_recipient
+
+            create_query = f"CREATE RECIPIENT IF NOT EXISTS {recipient_name} USING ID '{sharing_identifier}'"
+            self.spark.sql(create_query)
+            return recipient_name
+
+        except Exception as e:
+            raise Exception(
+                f"""Failed to create recipient '{recipient_name}' for '{sharing_identifier}': {str(e)}"""
+            ) from e
+
+    def create_delta_share(self, share_name: str, recipient_name: str) -> None:
+        """
+        Create delta share and grant permissions to recipient.
+
+        Args:
+            share_name: Name of the share to create
+            recipient_name: Name of the recipient to grant permissions to
+
+        Raises:
+            Exception: If share creation or permission granting fails
+        """
+        try:
+            # Create the share
+            create_share_query = f"CREATE SHARE IF NOT EXISTS {share_name}"
+            self.spark.sql(create_share_query)
+
+            # Grant SELECT and READ_VOLUME permissions to recipient
+            grant_select_query = (
+                f"GRANT SELECT ON SHARE {share_name} TO RECIPIENT `{recipient_name}`"
+            )
+
+            self.spark.sql(grant_select_query)
+
+        except Exception as e:
+            raise Exception(
+                f"""Failed to create delta share '{share_name}' or grant permissions to '{recipient_name}': {str(e)}"""
+            ) from e
+
+    def is_schema_in_share(
+        self, share_name: str, catalog_name: str, schema_name: str
+    ) -> bool:
+        """
+        Check if schema is already in the delta share.
+
+        Args:
+            share_name: Name of the share
+            catalog_name: Name of the catalog containing the schema
+            schema_name: Name of the schema to check
+
+        Returns:
+            True if schema is in share, False otherwise
+        """
+        try:
+            # Default schema is always included in shares
+            if schema_name == 'default':
+                return True
+            
+            full_schema_name = f"{catalog_name}.{schema_name}"
+            show_share_query = f"SHOW ALL IN SHARE {share_name}"
+            result = (
+                self.spark.sql(show_share_query)
+                .filter(f'''
+                        `shared_object` = "{full_schema_name}"
+                        and `type` = "SCHEMA"''')
+                .count()
+            )
+
+            if result > 0:
+                return True
+            return False
+
+        except Exception as e:
+            print(
+                f"""Warning: Could not check if schema {catalog_name}.{schema_name} is in share {share_name}: {e}"""
+            )
+            return False
+
+    def add_schema_to_share(
+        self, share_name: str, catalog_name: str, schema_name: str
+    ) -> None:
+        """
+        Add schema to delta share if not already present.
+
+        Args:
+            share_name: Name of the share
+            catalog_name: Name of the catalog containing the schema
+            schema_name: Name of the schema to add to the share
+
+        Raises:
+            Exception: If adding schema to share fails
+        """
+        try:
+            # Check if schema is already in the share
+            if self.is_schema_in_share(share_name, catalog_name, schema_name):
+                return
+
+            full_schema_name = f"{catalog_name}.{schema_name}"
+            add_schema_query = f"ALTER SHARE {share_name} ADD SCHEMA {full_schema_name}"
+            self.spark.sql(add_schema_query)
+
+        except Exception as e:
+            raise Exception(
+                f"""Failed to add schema '{catalog_name}.{schema_name}' to share '{share_name}': {str(e)}"""
+            ) from e
+
+    def get_provider_name(self, sharing_identifier: str) -> str:
+        """
+        Get delta share provider name.
+
+        Returns:
+            provider_name if exists else None
+        """
+        try:
+            # check if the provider exists
+            select_sql = f"""SELECT provider_name FROM
+                    system.information_schema.providers
+                    WHERE authentication_type = 'DATABRICKS'
+                    AND data_provider_global_metastore_id = '{sharing_identifier}'
+                    """
+            df = self.spark.sql(select_sql)
+            # return provider name if exists
+            if not df.isEmpty():
+                return df.collect()[0][0]
+            return None
+
+        except Exception as e:
+            raise Exception(f"""Failed to get provider name: {str(e)}""") from e

@@ -32,7 +32,6 @@ if parent_folder not in sys.path:
 
 import argparse
 import uuid
-import yaml
 from pathlib import Path
 
 from databricks.sdk import WorkspaceClient
@@ -50,6 +49,50 @@ def create_logger(config) -> DataReplicationLogger:
     if hasattr(config, "logging") and config.logging:
         logger.setup_logging(config.logging)
     return logger
+
+
+def validate_execution_environment(config, operation, logger) -> int:
+    """Validate configuration requirements based on execution environment and operation."""
+    if config.execute_at == "source" and operation not in ["backup"]:
+        logger.error(
+            "When execute_at is 'source', only 'backup' operation is allowed"
+        )
+        return 1
+
+    if config.execute_at == "target" and operation in [
+        "backup",
+        "all",
+    ]:
+        if (
+            not config.source_databricks_connect_config.host
+            or not config.source_databricks_connect_config.token
+        ):
+            logger.error(
+                "Source Databricks Connect configuration must be provided for backup operations when execute_at is 'target'"
+            )
+            return 1
+
+    if config.execute_at == "external":
+        if operation in ["backup", "all"]:
+            if (
+                not config.source_databricks_connect_config.host
+                or not config.source_databricks_connect_config.token
+            ):
+                logger.error(
+                    "Source Databricks Connect configuration must be provided for backup operations when execute_at is 'external'"
+                )
+                return 1
+        if operation in ["replication", "reconciliation", "all"]:
+            if (
+                not config.target_databricks_connect_config.host
+                or not config.target_databricks_connect_config.token
+            ):
+                logger.error(
+                    "Target Databricks Connect configuration must be provided for replication and reconciliation operations when execute_at is 'external'"
+                )
+                return 1
+
+    return 0
 
 
 def run_backup_only(
@@ -156,13 +199,13 @@ def main():
     parser.add_argument(
         "--target-schemas",
         type=str,
-        help="JSON string containing list of schema configurations to override target_schemas in config file"
+        help="JSON string containing list of schema configurations to override target_schemas in config file",
     )
 
     parser.add_argument(
         "--concurrency",
         type=str,
-        help="JSON string containing concurrency configuration to override concurrency settings in config file"
+        help="JSON string containing concurrency configuration to override concurrency settings in config file",
     )
 
     args = parser.parse_args()
@@ -178,7 +221,9 @@ def main():
 
     try:
         # Load and validate configuration
-        config = ConfigLoader.load_from_file(config_path, args.target_schemas, args.concurrency)
+        config = ConfigLoader.load_from_file(
+            config_path, args.target_schemas, args.concurrency
+        )
         logger = create_logger(config)
 
         logger.info(f"Loaded configuration from {config_path}")
@@ -192,24 +237,9 @@ def main():
             # Add dry-run logic here
             return 0
 
-        if config.execute_at == "source" and args.operation not in ["backup"]:
-            logger.error(
-                "When execute_at is 'source', only 'backup' operation is allowed"
-            )
-            return 1
-
-        if config.execute_at == "target" and args.operation in [
-            "backup",
-            "all",
-        ]:
-            if (
-                not config.source_databricks_connect_config.host
-                or not config.source_databricks_connect_config.token
-            ):
-                logger.error(
-                    "Source Databricks Connect configuration must be provided for backup operations when execute_at is 'target'"
-                )
-                return 1
+        validation_result = validate_execution_environment(config, args.operation, logger)
+        if validation_result != 0:
+            return validation_result
 
         run_id = str(uuid.uuid4())
 

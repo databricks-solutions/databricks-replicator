@@ -12,7 +12,11 @@ from typing import Union
 import yaml
 from pydantic import ValidationError
 
-from data_replication.config.models import ReplicationSystemConfig, SchemaConfig, ConcurrencyConfig
+from data_replication.config.models import (
+    ReplicationSystemConfig,
+    SchemaConfig,
+    ConcurrencyConfig,
+)
 
 
 class ConfigurationError(Exception):
@@ -64,39 +68,49 @@ class ConfigLoader:
                 override_schemas = json.loads(target_schemas_override)
                 if not isinstance(override_schemas, list):
                     raise ConfigurationError("target_schemas override must be a list")
-                
+
                 # Validate schema configs
                 validated_schemas = []
                 for schema_data in override_schemas:
                     validated_schemas.append(SchemaConfig(**schema_data))
-                
+
                 # Apply override to all target catalogs
                 if "target_catalogs" in config_data:
                     for catalog in config_data["target_catalogs"]:
-                        catalog["target_schemas"] = [schema.model_dump() for schema in validated_schemas]
-                        
+                        catalog["target_schemas"] = [
+                            schema.model_dump() for schema in validated_schemas
+                        ]
+
             except json.JSONDecodeError as e:
-                raise ConfigurationError(f"Error parsing target_schemas JSON: {e}") from e
+                raise ConfigurationError(
+                    f"Error parsing target_schemas JSON: {e}"
+                ) from e
             except ValidationError as e:
-                raise ConfigurationError(f"Invalid target_schemas configuration: {e}") from e
+                raise ConfigurationError(
+                    f"Invalid target_schemas configuration: {e}"
+                ) from e
 
         # Handle concurrency override
         if concurrency_override:
             try:
                 override_concurrency = json.loads(concurrency_override)
                 if not isinstance(override_concurrency, dict):
-                    raise ConfigurationError("concurrency override must be a dictionary")
-                
+                    raise ConfigurationError(
+                        "concurrency override must be a dictionary"
+                    )
+
                 # Validate concurrency config
                 validated_concurrency = ConcurrencyConfig(**override_concurrency)
-                
+
                 # Apply override to config data
                 config_data["concurrency"] = validated_concurrency.model_dump()
-                        
+
             except json.JSONDecodeError as e:
                 raise ConfigurationError(f"Error parsing concurrency JSON: {e}") from e
             except ValidationError as e:
-                raise ConfigurationError(f"Invalid concurrency configuration: {e}") from e
+                raise ConfigurationError(
+                    f"Invalid concurrency configuration: {e}"
+                ) from e
 
         try:
             config = ReplicationSystemConfig(**config_data)

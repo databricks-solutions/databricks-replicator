@@ -27,6 +27,7 @@ class AuditLogger:
         logger: DataReplicationLogger,
         run_id: str,
         audit_table: str,
+        audit_catalog_location: Optional[str] = None,
         config_details: Optional[Dict[str, Any]] = None,
     ):
         """
@@ -44,6 +45,7 @@ class AuditLogger:
         self.logger = logger
         self.run_id = run_id
         self.audit_table = audit_table
+        self.audit_catalog_location = audit_catalog_location
         self.config_details_json = (
             json.dumps(config_details, default=str) if config_details else None
         )
@@ -73,7 +75,7 @@ class AuditLogger:
             audit_catalog = audit_parts[0]
             audit_schema = audit_parts[1]
 
-            self.db_ops.create_catalog_if_not_exists(audit_catalog)
+            self.db_ops.create_catalog_if_not_exists(audit_catalog, self.audit_catalog_location)
             self.db_ops.create_schema_if_not_exists(audit_catalog, audit_schema)
         else:
             # Fallback to standard logging if audit table logging fails

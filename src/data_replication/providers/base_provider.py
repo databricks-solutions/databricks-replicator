@@ -16,12 +16,21 @@ from databricks.connect import DatabricksSession
 from pyspark.sql.utils import AnalysisException
 
 from ..audit.logger import DataReplicationLogger
-from ..config.models import (RetryConfig, RunResult, TableConfig,
-                             TargetCatalogConfig)
+from ..config.models import (
+    RetryConfig,
+    RunResult,
+    TableConfig,
+    TargetCatalogConfig,
+    DatabricksConnectConfig,
+)
 from ..databricks_operations import DatabricksOperations
-from ..exceptions import (BackupError, DataReplicationError,
-                          ReconciliationError, ReplicationError,
-                          SparkSessionError)
+from ..exceptions import (
+    BackupError,
+    DataReplicationError,
+    ReconciliationError,
+    ReplicationError,
+    SparkSessionError,
+)
 
 
 class BaseProvider(ABC):
@@ -34,6 +43,8 @@ class BaseProvider(ABC):
         db_ops: DatabricksOperations,
         run_id: str,
         catalog_config: TargetCatalogConfig,
+        source_databricks_config: DatabricksConnectConfig,
+        target_databricks_config: DatabricksConnectConfig,
         retry: Optional[RetryConfig] = None,
         max_workers: int = 2,
         timeout_seconds: int = 1800,
@@ -57,6 +68,8 @@ class BaseProvider(ABC):
         self.db_ops = db_ops
         self.run_id = run_id
         self.catalog_config = catalog_config
+        self.source_databricks_config = source_databricks_config
+        self.target_databricks_config = target_databricks_config
         self.retry = (
             retry if retry else RetryConfig(max_attempts=1, retry_delay_seconds=5)
         )
@@ -177,14 +190,12 @@ class BaseProvider(ABC):
             self.catalog_name = self.setup_operation_catalogs()
 
             self.logger.info(
-                f"Starting {self.get_operation_name()}: {self.catalog_name}->{self.catalog_config.catalog_name}",
+                f"Starting {self.get_operation_name()}: {self.catalog_name}",
                 extra={
                     "run_id": self.run_id,
                     "operation": self.get_operation_name(),
                 },
             )
-            # Ensure target catalog exists
-            self.db_ops.create_catalog_if_not_exists(self.catalog_config.catalog_name)
 
             # Get schemas to process
             schema_list = self._get_schemas()
@@ -353,6 +364,7 @@ class BaseProvider(ABC):
                     schema.tables or [],
                 )
                 for schema in self.catalog_config.target_schemas
+                if self.db_ops.refresh_schema_metadata(schema.schema_name)
             ]
 
         if self.catalog_config.schema_filter_expression:

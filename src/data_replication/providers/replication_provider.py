@@ -36,11 +36,38 @@ class ReplicationProvider(BaseProvider):
     def setup_operation_catalogs(self) -> str:
         """Setup replication-specific catalogs."""
         replication_config = self.catalog_config.replication_config
-        if replication_config.intermediate_catalog:
-            self.db_ops.create_catalog_if_not_exists(
-                replication_config.intermediate_catalog
+        if replication_config.create_target_catalog:
+            self.logger.info(
+                f"""Creating target catalog: {self.catalog_config.catalog_name} at location: {replication_config.target_catalog_location}"""
             )
-        self.logger.info(f"Cloning catalog: {replication_config.source_catalog}")
+            self.db_ops.create_catalog_if_not_exists(
+                self.catalog_config.catalog_name,
+                replication_config.target_catalog_location,
+            )
+        # Create intermediate catalog if needed
+        if replication_config.intermediate_catalog:
+            self.logger.info(
+                f"""Creating intermediate catalog: {replication_config.intermediate_catalog} at location: {replication_config.intermediate_catalog_location}"""
+            )
+            self.db_ops.create_catalog_if_not_exists(
+                replication_config.intermediate_catalog,
+                replication_config.intermediate_catalog_location,
+            )
+
+        # Create source catalog from share if needed
+        if replication_config.create_shared_catalog:
+            provider_name = self.db_ops.get_provider_name(
+                self.source_databricks_config.sharing_identifier
+            )
+            self.logger.info(
+                f"""Creating source catalog from share: {replication_config.source_catalog} using share name: {replication_config.share_name}"""
+            )
+            self.db_ops.create_catalog_using_share_if_not_exists(
+                replication_config.source_catalog,
+                provider_name,
+                replication_config.share_name,
+            )
+
         return replication_config.source_catalog
 
     def process_schema_concurrently(
@@ -84,16 +111,20 @@ class ReplicationProvider(BaseProvider):
         source_table = f"{source_catalog}.{schema_name}.{table_name}"
         target_table = f"{target_catalog}.{schema_name}.{table_name}"
 
-        self.logger.info(
-            f"Starting replication: {source_table} -> {target_table}",
-            extra={"run_id": self.run_id, "operation": "replication"},
-        )
-
         step1_query = None
         step2_query = None
         dlt_flag = None
+        attempt = 1
+        max_attempts = self.retry.max_attempts
+        actual_target_table = target_table
+        source_table_type = None
 
         try:
+            self.logger.info(
+                f"Starting replication: {source_table} -> {target_table}",
+                extra={"run_id": self.run_id, "operation": "replication"},
+            )
+
             # Check if source table exists
             if not self.spark.catalog.tableExists(source_table):
                 raise TableNotFoundError(f"Source table does not exist: {source_table}")
@@ -111,19 +142,29 @@ class ReplicationProvider(BaseProvider):
                 table_details = self.db_ops.get_table_details(source_table)
                 if table_details["is_dlt"]:
                     raise TableNotFoundError(
-                        f"Target table {target_table} does not exist. Cannot replicate DLT table without existing target."
+                        f"""
+                        Target table {target_table} does not exist. Cannot replicate DLT table without existing target.
+                        """
                     ) from exc
                 dlt_flag = False
                 pipeline_id = None
                 actual_target_table = target_table
 
             if self.spark.catalog.tableExists(actual_target_table):
+                # Validate schema match between source and target
                 if self.db_ops.get_table_fields(
                     source_table
                 ) != self.db_ops.get_table_fields(actual_target_table):
-                    raise ReplicationError(
-                        f"Schema mismatch between table {source_table} "
-                        f"and target table {target_table}"
+                    if replication_config.enforce_schema:
+                        raise ReplicationError(
+                            f"Schema mismatch between table {source_table} "
+                            f"and target table {target_table}"
+                        )
+                    self.logger.warning(
+                        f"Schema mismatch detected between table {source_table} "
+                        f"and target table {target_table}, but proceeding due to "
+                        f"enforce_schema=False",
+                        extra={"run_id": self.run_id, "operation": "replication"},
                     )
 
             # Use custom retry decorator with logging

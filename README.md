@@ -1,33 +1,33 @@
 # Data Replication System for Databricks
 
-A comprehensive data replication system for Databricks with support for backup, replication, and reconciliation of Delta Live Tables (DLT) and regular Delta tables across different cloud and metastores.
+A comprehensive data replication system for Databricks with support for backup, replication, and reconciliation of data across different cloud and metastores.
 
 ## Overview
 
-This system provides incremental data replication capabilities between Databricks metastores, with specialized handling for Delta Live Tables (DLT). It supports multiple operation types that can be run independently or together:
+This system provides incremental data replication capabilities between Databricks metastores, with specialized handling for Streaming Tables. It supports multiple operation types that can be run independently or together:
 
 - **Backup**: Deep clone operations from DLT internal tables to backup catalogs
 - **Replication**: Cross-metastore incremental table replication with schema enforcement
 - **Reconciliation**: Data validation with row counts, schema checks, and missing data detection
 
 ## Supported Object Types
-- Streaming Tables (data only, not checkpoints)
+- Streaming Tables (data only, no checkpoints)
 - Managed Table
 - External Table
 
 ## Unsupported Object Types
 - Materialized Views
 - SQL Views
-- Checkpointing for streaming tables
+- Volume Files
 
 ## Key Features
 
 ### Incremental Data Refresh
 The system leverages Deep Clone for incrementality
 
-### DLT Table Handling
-The system automatically handles Delta Live Tables complexities:
-- Extracts pipeline IDs using `DESCRIBE DETAIL` on DLT tables
+### Streaming Table Handling
+The system automatically handles Streaming Tables complexities:
+- Extracts pipeline IDs using `DESCRIBE DETAIL`
 - Constructs internal table path using pipeline ID
 - Performs operations on internal tables rather than DLT tables directly
 
@@ -46,11 +46,10 @@ The system automatically handles Delta Live Tables complexities:
 ## Installation
 
 ### Prerequisites
-- Appropriate permissions for table operations and secret access
-- Cloud Token based D2D Delta Sharing Enabled
-- DLT Streaming tables already exist in target
-- Delta Sharing shares and catalog created with all schemas added for replication - to be automated in future
-- Source and target SP PAT and Databricks secrets created if executed outside Databricks
+- Cloud Token based D2D Delta Sharing (DS) Enabled, i.e. Source as DS Provider, Target as DS Recipient
+- Source and target Service Principal with metastore admin and workspace admin access
+- SP OAuth Token stored in Databricks secrets created if executed outside Databricks
+- For Streaming Table replication, target tables need to already exist
 
 
 ### Setup
