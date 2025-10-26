@@ -184,24 +184,25 @@ def main():
         help="Only validate configuration without running operations",
     )
 
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be processed without executing operations",
-    )
-
     parser.add_argument("--run_id", action="store_true", help="Unique Run ID")
+
+    parser.add_argument(
+        "--target-catalog",
+        type=str,
+        help="target catalog name, e.g. catalog1",
+    )
 
     parser.add_argument(
         "--target-schemas",
         type=str,
-        help="JSON string containing list of schema configurations to override target_schemas in config file",
+        help="list of schemas separated by comma, e.g. schema1,schema2",
     )
 
     parser.add_argument(
         "--concurrency",
-        type=str,
-        help="JSON string containing concurrency configuration to override concurrency settings in config file",
+        type=int,
+        default=4,
+        help="maximum number of concurrent tasks, default is 4",
     )
 
     args = parser.parse_args()
@@ -218,7 +219,7 @@ def main():
     try:
         # Load and validate configuration
         config = ConfigLoader.load_from_file(
-            config_path, args.target_schemas, args.concurrency
+            config_path, args.target_schemas, args.target_catalog, args.concurrency
         )
         logger = create_logger(config)
 

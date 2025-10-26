@@ -78,20 +78,22 @@ data-replicator --help
 # Run all enabled operations
 data-replicator <config.yaml>
 
+# Validate configuration without running
+data-replicator <config.yaml> --validate-only
+
+# Run all enabled operations against targeted catalog and schemas
+data-replicator <config.yaml>  --target-catalog aaron --target-schemas bronze_1,bronze_2
+
+# Run with different concurrency
+data-replicator <config.yaml> --concurrency 10
+
 # Run specific operation only
 data-replicator <config.yaml> --operation backup
 data-replicator <config.yaml> --operation replication
 data-replicator <config.yaml> --operation reconciliation
-
-# Validate configuration without running
-data-replicator <config.yaml> --validate-only
-
-# Combine dry run with specific operation
-data-replicator <config.yaml> --operation backup --dry-run
 ```
 
 ### Operation Types
-
 #### Backup Operations
 - For ST, deep clones ST backing tables from source to backup catalogs.
 - Add schemas to share.

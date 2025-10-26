@@ -190,7 +190,7 @@ class BaseProvider(ABC):
             self.catalog_name = self.setup_operation_catalogs()
 
             self.logger.info(
-                f"Starting {self.get_operation_name()}: {self.catalog_name}",
+                f"Starting {self.get_operation_name()} catalog: {self.catalog_name}",
                 extra={
                     "run_id": self.run_id,
                     "operation": self.get_operation_name(),
@@ -199,8 +199,18 @@ class BaseProvider(ABC):
 
             # Get schemas to process
             schema_list = self._get_schemas()
+            self.logger.info(
+                f"Starting {self.get_operation_name()} schemas: {schema_list}"
+            )
 
             for schema_name, table_list in schema_list:
+                self.logger.info(
+                    f"Starting {self.get_operation_name()} schema: {schema_name}",
+                    extra={
+                        "run_id": self.run_id,
+                        "operation": self.get_operation_name(),
+                    },
+                )
                 schema_results = self.process_schema_concurrently(
                     schema_name, table_list
                 )
@@ -243,14 +253,16 @@ class BaseProvider(ABC):
 
             if not tables:
                 self.logger.info(
-                    f"No tables found in schema {catalog_name}.{schema_name}"
+                    f"No tables found in schema {self.catalog_name}.{schema_name}"
                 )
                 return results
 
             self.logger.info(
                 f"Starting concurrent {self.get_operation_name()} of {len(tables)} tables "
-                f"in schema {catalog_name}.{schema_name} using {self.max_workers} workers"
+                f"in schema {self.catalog_name}.{schema_name} using {self.max_workers} workers"
             )
+
+            self.logger.info(f"Tables {tables}")
 
             # Process tables concurrently within the schema
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -364,13 +376,14 @@ class BaseProvider(ABC):
                     schema.tables or [],
                 )
                 for schema in self.catalog_config.target_schemas
-                if self.db_ops.refresh_schema_metadata(schema.schema_name)
+                if self.db_ops.refresh_schema_metadata(f"{self.catalog_name}.{schema.schema_name}")
+                and self.spark.catalog.databaseExists(f"{self.catalog_name}.{schema.schema_name}")
             ]
 
         if self.catalog_config.schema_filter_expression:
             # Use schema filter expression
             schema_list = self.db_ops.get_schemas_by_filter(
-                self.catalog_config.catalog_name,
+                self.catalog_name,
                 self.catalog_config.schema_filter_expression,
             )
         else:

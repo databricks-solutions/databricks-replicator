@@ -30,15 +30,18 @@ class ConfigLoader:
     def load_from_file(
         config_path: Union[str, Path],
         target_schemas_override: str = None,
-        concurrency_override: str = None,
+        target_catalog_override: str = None,
+        concurrency_override: int = None,
     ) -> ReplicationSystemConfig:
         """
         Load and validate configuration from a YAML file.
 
         Args:
             config_path: Path to the YAML configuration file
-            target_schemas_override: JSON string containing target_schemas override
-            concurrency_override: JSON string containing concurrency configuration override
+            target_schemas_override: Comma-separated string of schema names
+                (e.g., "schema1,schema2")
+            target_catalog_override: Target catalog name to override in config
+            concurrency_override: integer containing concurrency configuration override
 
         Returns:
             Validated ReplicationSystemConfig instance
@@ -62,17 +65,46 @@ class ConfigLoader:
         if config_data is None:
             raise ConfigurationError(f"Configuration file is empty: {config_path}")
 
+        # Handle target_catalog override
+        if target_catalog_override:
+            try:
+                # Validate catalog name format (alphanumeric, dashes, and underscores)
+                if not target_catalog_override.replace("_", "").replace("-", "").isalnum():
+                    raise ValidationError(
+                        f"Invalid catalog name '{target_catalog_override}': "
+                        "catalog names can only contain alphanumeric characters, "
+                        "dashes, and underscores"
+                    )
+
+                # Apply override to all target catalogs
+                if "target_catalogs" in config_data:
+                    for catalog in config_data["target_catalogs"]:
+                        catalog["catalog_name"] = target_catalog_override
+
+            except ValidationError as e:
+                raise ConfigurationError(
+                    f"Invalid target_catalog configuration: {e}"
+                ) from e
+
         # Handle target_schemas override
         if target_schemas_override:
             try:
-                override_schemas = json.loads(target_schemas_override)
-                if not isinstance(override_schemas, list):
-                    raise ConfigurationError("target_schemas override must be a list")
+                # Parse comma-separated schema names
+                schema_names = [
+                    name.strip().lower() for name in target_schemas_override.split(",")
+                ]
+                # Validate schema names format (alphanumeric and underscores only)
+                for schema_name in schema_names:
+                    if not schema_name.replace("_", "").replace("-", "").isalnum():
+                        raise ValidationError(
+                            f"Invalid schema name '{schema_name}': "
+                            "schema names can only contain alphanumeric characters, dashes, and underscores"
+                        )
 
-                # Validate schema configs
+                # Create schema configs
                 validated_schemas = []
-                for schema_data in override_schemas:
-                    validated_schemas.append(SchemaConfig(**schema_data))
+                for schema_name in schema_names:
+                    validated_schemas.append(SchemaConfig(schema_name=schema_name))
 
                 # Apply override to all target catalogs
                 if "target_catalogs" in config_data:
@@ -81,10 +113,6 @@ class ConfigLoader:
                             schema.model_dump() for schema in validated_schemas
                         ]
 
-            except json.JSONDecodeError as e:
-                raise ConfigurationError(
-                    f"Error parsing target_schemas JSON: {e}"
-                ) from e
             except ValidationError as e:
                 raise ConfigurationError(
                     f"Invalid target_schemas configuration: {e}"
@@ -93,20 +121,18 @@ class ConfigLoader:
         # Handle concurrency override
         if concurrency_override:
             try:
-                override_concurrency = json.loads(concurrency_override)
-                if not isinstance(override_concurrency, dict):
-                    raise ConfigurationError(
-                        "concurrency override must be a dictionary"
+                # Validate concurrency value
+                if not isinstance(concurrency_override, int) or concurrency_override < 1:
+                    raise ValidationError(
+                        "concurrency_override must be a positive integer"
                     )
 
-                # Validate concurrency config
-                validated_concurrency = ConcurrencyConfig(**override_concurrency)
+                # Create concurrency config with max_workers override
+                validated_concurrency = ConcurrencyConfig(max_workers=concurrency_override)
 
                 # Apply override to config data
                 config_data["concurrency"] = validated_concurrency.model_dump()
 
-            except json.JSONDecodeError as e:
-                raise ConfigurationError(f"Error parsing concurrency JSON: {e}") from e
             except ValidationError as e:
                 raise ConfigurationError(
                     f"Invalid concurrency configuration: {e}"
