@@ -25,7 +25,7 @@ This system provides incremental data replication capabilities between Databrick
 ## Key Features
 
 ### Delta Sharing
-Option to let the tool setup Delta share automatically for you, i.e. Recipient, Shares and Shared Catalogs. Or use your existing Delta share configs
+Option to let the tool setup Delta share automatically for you, i.e. Recipient, Shares and Shared Catalogs. Or BYO Delta share infra
 
 ### Incremental Data Replication
 The system leverages Deep Clone for incrementality
