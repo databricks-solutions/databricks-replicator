@@ -228,11 +228,6 @@ def main():
             logger.info("Configuration validation completed successfully")
             return 0
 
-        if args.dry_run:
-            logger.info("Dry-run mode: showing what would be processed")
-            # Add dry-run logic here
-            return 0
-
         validation_result = validate_execution_environment(
             config, args.operation, logger
         )

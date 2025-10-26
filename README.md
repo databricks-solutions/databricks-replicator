@@ -85,9 +85,6 @@ data-replicator <config.yaml> --operation reconciliation
 # Validate configuration without running
 data-replicator <config.yaml> --validate-only
 
-# Dry run to preview operations
-data-replicator <config.yaml> --dry-run
-
 # Combine dry run with specific operation
 data-replicator <config.yaml> --operation backup --dry-run
 ```
