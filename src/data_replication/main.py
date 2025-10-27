@@ -184,7 +184,7 @@ def main():
         help="Only validate configuration without running operations",
     )
 
-    parser.add_argument("--run_id", action="store_true", help="Unique Run ID")
+    parser.add_argument("--run-id", action="store_true", help="Unique Run ID")
 
     parser.add_argument(
         "--target-catalog",
@@ -216,6 +216,7 @@ def main():
         )
         return 1
 
+    print(args.target_schemas)
     try:
         # Load and validate configuration
         config = ConfigLoader.load_from_file(
