@@ -216,7 +216,6 @@ def main():
         )
         return 1
 
-    print(args.target_schemas)
     try:
         # Load and validate configuration
         config = ConfigLoader.load_from_file(
