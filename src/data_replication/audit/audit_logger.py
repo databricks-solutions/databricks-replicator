@@ -74,8 +74,14 @@ class AuditLogger:
         if len(audit_parts) >= 2:
             audit_catalog = audit_parts[0]
             audit_schema = audit_parts[1]
-
-            self.db_ops.create_catalog_if_not_exists(audit_catalog, self.audit_catalog_location)
+            try:
+                self.db_ops.create_catalog_if_not_exists(
+                    audit_catalog, self.audit_catalog_location
+                )
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to create audit catalog {audit_catalog}: {str(e)}"
+                )
             self.db_ops.create_schema_if_not_exists(audit_catalog, audit_schema)
         else:
             # Fallback to standard logging if audit table logging fails
