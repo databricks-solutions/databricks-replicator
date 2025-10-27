@@ -51,6 +51,54 @@ def create_logger(config) -> DataReplicationLogger:
     return logger
 
 
+def validate_args(args) -> None:
+    """
+    Validate command line arguments according to business rules.
+
+    Args:
+        args: Parsed command line arguments
+
+    Raises:
+        ValueError: If validation rules are violated
+    """
+    # Rule: target-catalog should only contain 1 catalog
+    if args.target_catalog:
+        catalog_names = [name.strip() for name in args.target_catalog.split(",")]
+        catalog_names = [name for name in catalog_names if name]  # Filter empty strings
+        if len(catalog_names) > 1:
+            raise ValueError(
+                f"target-catalog should only contain 1 catalog, but got {len(catalog_names)}: "
+                f"{', '.join(catalog_names)}"
+            )
+
+    # Rule: when target-schema is provided, target-catalog must be provided
+    if args.target_schemas and not args.target_catalog:
+        raise ValueError(
+            "When target-schemas is provided, target-catalog must also be provided"
+        )
+
+    # Rule: when target-tables is provided, target-schemas and target-catalog must be provided
+    if args.target_tables:
+        if not args.target_schemas:
+            raise ValueError(
+                "When target-tables is provided, target-schemas must also be provided"
+            )
+        if not args.target_catalog:
+            raise ValueError(
+                "When target-tables is provided, target-catalog must also be provided"
+            )
+
+    # Rule: if target-tables is provided, target-schemas should only contain 1 schema
+    if args.target_tables and args.target_schemas:
+        schema_names = [name.strip() for name in args.target_schemas.split(",")]
+        schema_names = [name for name in schema_names if name]  # Filter empty strings
+        if len(schema_names) > 1:
+            raise ValueError(
+                f"When target-tables is provided, target-schemas should only contain 1 schema, "
+                f"but got {len(schema_names)}: {', '.join(schema_names)}"
+            )
+
+
 def validate_execution_environment(config, operation, logger) -> int:
     """Validate configuration requirements based on execution environment and operation."""
     if config.execute_at == "source" and operation not in ["backup"]:
@@ -199,6 +247,12 @@ def main():
     )
 
     parser.add_argument(
+        "--target-tables",
+        type=str,
+        help="list of tables separated by comma, e.g. table1,table2",
+    )
+
+    parser.add_argument(
         "--concurrency",
         type=int,
         default=4,
@@ -206,6 +260,13 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Validate command line arguments
+    try:
+        validate_args(args)
+    except ValueError as e:
+        print(f"Argument validation error: {e}")
+        return 1
 
     # Validate config file exists
     config_path = Path(args.config_file)
@@ -219,7 +280,11 @@ def main():
     try:
         # Load and validate configuration
         config = ConfigLoader.load_from_file(
-            config_path, args.target_schemas, args.target_catalog, args.concurrency
+            config_path=config_path,
+            target_catalog_override=args.target_catalog,
+            target_schemas_override=args.target_schemas,
+            target_tables_override=args.target_tables,
+            concurrency_override=args.concurrency,
         )
         logger = create_logger(config)
 

@@ -5,7 +5,6 @@ This module handles loading and validating YAML configuration files
 using Pydantic models.
 """
 
-import json
 from pathlib import Path
 from typing import Union
 
@@ -16,6 +15,7 @@ from data_replication.config.models import (
     ReplicationSystemConfig,
     SchemaConfig,
     ConcurrencyConfig,
+    TableConfig,
 )
 
 
@@ -29,8 +29,9 @@ class ConfigLoader:
     @staticmethod
     def load_from_file(
         config_path: Union[str, Path],
-        target_schemas_override: str = None,
         target_catalog_override: str = None,
+        target_schemas_override: str = None,
+        target_tables_override: str = None,
         concurrency_override: int = None,
     ) -> ReplicationSystemConfig:
         """
@@ -41,6 +42,8 @@ class ConfigLoader:
             target_schemas_override: Comma-separated string of schema names
                 (e.g., "schema1,schema2")
             target_catalog_override: Target catalog name to override in config
+            target_tables_override: Comma-separated string of table names
+                (e.g., "table1,table2")
             concurrency_override: integer containing concurrency configuration override
 
         Returns:
@@ -69,7 +72,11 @@ class ConfigLoader:
         if target_catalog_override:
             try:
                 # Validate catalog name format (alphanumeric, dashes, and underscores)
-                if not target_catalog_override.replace("_", "").replace("-", "").isalnum():
+                if (
+                    not target_catalog_override.replace("_", "")
+                    .replace("-", "")
+                    .isalnum()
+                ):
                     raise ValidationError(
                         f"Invalid catalog name '{target_catalog_override}': "
                         "catalog names can only contain alphanumeric characters, "
@@ -79,14 +86,17 @@ class ConfigLoader:
                 # Apply override to all target catalogs
                 if "target_catalogs" in config_data:
                     for catalog in config_data["target_catalogs"]:
-                        catalog["catalog_name"] = target_catalog_override
+                        catalog_copy = catalog.copy()
+                        catalog_copy["catalog_name"] = target_catalog_override
+                        break
+                    config_data["target_catalogs"] = [catalog_copy]
 
             except ValidationError as e:
                 raise ConfigurationError(
                     f"Invalid target_catalog configuration: {e}"
                 ) from e
 
-        # Handle target_schemas override
+        # Handle target_schemas & target_tables override
         if target_schemas_override:
             try:
                 # Parse comma-separated schema names
@@ -104,7 +114,25 @@ class ConfigLoader:
                 # Create schema configs
                 validated_schemas = []
                 for schema_name in schema_names:
-                    validated_schemas.append(SchemaConfig(schema_name=schema_name))
+                    # Handle target_tables override
+                    if target_tables_override:
+                        # Parse comma-separated table names
+                        table_names = [
+                            name.strip().lower()
+                            for name in target_tables_override.split(",")
+                        ]
+
+                        # Create table configs
+                        validated_tables = []
+                        for table_name in table_names:
+                            if table_name:
+                                validated_tables.append(
+                                    TableConfig(table_name=table_name)
+                                )
+
+                    validated_schemas.append(
+                        SchemaConfig(schema_name=schema_name, tables=validated_tables)                        
+                    )
 
                 # Apply override to all target catalogs
                 if "target_catalogs" in config_data:
@@ -122,13 +150,18 @@ class ConfigLoader:
         if concurrency_override:
             try:
                 # Validate concurrency value
-                if not isinstance(concurrency_override, int) or concurrency_override < 1:
+                if (
+                    not isinstance(concurrency_override, int)
+                    or concurrency_override < 1
+                ):
                     raise ValidationError(
                         "concurrency_override must be a positive integer"
                     )
 
                 # Create concurrency config with max_workers override
-                validated_concurrency = ConcurrencyConfig(max_workers=concurrency_override)
+                validated_concurrency = ConcurrencyConfig(
+                    max_workers=concurrency_override
+                )
 
                 # Apply override to config data
                 config_data["concurrency"] = validated_concurrency.model_dump()
