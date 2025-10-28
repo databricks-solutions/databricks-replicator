@@ -86,6 +86,7 @@ class ProviderFactory:
                     db_ops=self.db_ops,
                     logger=self.logger,
                     run_id=self.run_id,
+                    create_audit_catalog=self.config.audit_config.create_audit_catalog,
                     audit_table=self.config.audit_config.audit_table,
                     audit_catalog_location=self.config.audit_config.audit_catalog_location,
                     config_details=config_dict,

@@ -45,7 +45,7 @@ class ReplicationProvider(BaseProvider):
                 replication_config.target_catalog_location,
             )
         # Create intermediate catalog if needed
-        if replication_config.intermediate_catalog:
+        if replication_config.create_intermediate_catalog and replication_config.intermediate_catalog:
             self.logger.info(
                 f"""Creating intermediate catalog: {replication_config.intermediate_catalog} at location: {replication_config.intermediate_catalog_location}"""
             )

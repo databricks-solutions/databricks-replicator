@@ -36,7 +36,7 @@ class BackupProvider(BaseProvider):
         """Setup backup-specific catalogs."""
         backup_config = self.catalog_config.backup_config
 
-        if backup_config.backup_catalog:
+        if backup_config.create_backup_catalog and backup_config.backup_catalog:
             self.logger.info(
                 f"""Creating backup catalog: {backup_config.backup_catalog} at location: {backup_config.backup_catalog_location}"""
             )
@@ -102,30 +102,82 @@ class BackupProvider(BaseProvider):
                 backup_config.backup_catalog, schema_name
             )
 
-        if backup_config.add_to_share:
-            # Ensure schema exists in source catalog before processing
-            if backup_config.source_catalog and backup_config.share_name:
-                self.logger.info(
-                    f"""Adding schema {backup_config.source_catalog}.{schema_name} to delta share: {backup_config.share_name}"""
-                )
-                self.db_ops.add_schema_to_share(
-                    backup_config.share_name,
-                    backup_config.source_catalog,
-                    schema_name,
-                )
+        results = []
 
-            # Ensure schema exists in backup catalog before processing
-            if backup_config.backup_catalog and backup_config.backup_share_name:
-                self.logger.info(
-                    f"""Adding schema {backup_config.backup_catalog}.{schema_name} to backup delta share: {backup_config.backup_share_name}"""
-                )
-                self.db_ops.add_schema_to_share(
-                    backup_config.backup_share_name,
-                    backup_config.backup_catalog,
-                    schema_name,
-                )
+        schema_share_result = self._add_schema_to_shares(schema_name, backup_config)
+        results.append(schema_share_result)
 
-        return super().process_schema_concurrently(schema_name, table_list)
+        if self.catalog_config.table_types != ["streaming_table"]:
+            self.logger.info(
+                f"""Skipping backup for schema {schema_name} as only streaming tables requires backup."""
+            )
+            return results
+
+        table_results = super().process_schema_concurrently(schema_name, table_list)
+        results.extend(table_results)
+        return results
+
+    def _add_schema_to_shares(self, schema_name: str, backup_config) -> RunResult:
+        """Add schema to delta shares and return a RunResult for the operation."""
+        start_time = datetime.now(timezone.utc)
+        error_msg = None
+        attempt = 1
+        max_attempts = 1
+        status = "success"
+
+        try:
+            if backup_config.add_to_share:
+                # Ensure schema exists in source catalog before processing
+                if backup_config.source_catalog and backup_config.share_name:
+                    self.logger.info(
+                        f"""Adding schema {backup_config.source_catalog}.{schema_name} to delta share: {backup_config.share_name}"""
+                    )
+                    self.db_ops.add_schema_to_share(
+                        backup_config.share_name,
+                        backup_config.source_catalog,
+                        schema_name,
+                    )
+
+                # Ensure schema exists in backup catalog before processing
+                if backup_config.backup_catalog and backup_config.backup_share_name:
+                    self.logger.info(
+                        f"""Adding schema {backup_config.backup_catalog}.{schema_name} to backup delta share: {backup_config.backup_share_name}"""
+                    )
+                    self.db_ops.add_schema_to_share(
+                        backup_config.backup_share_name,
+                        backup_config.backup_catalog,
+                        schema_name,
+                    )
+        except Exception as e:
+            self.logger.error( 
+                f"Failed to add schema {schema_name} to shares: {str(e)}",
+                extra={"run_id": self.run_id, "operation": "backup"},
+                exc_info=True,
+            )
+            error_msg = f"Failed to add schema {schema_name} to shares: {str(e)}"
+            status = "failed"
+        end_time = datetime.now(timezone.utc)
+        duration = (end_time - start_time).total_seconds()
+
+        return RunResult(
+            operation_type="backup",
+            catalog_name=self.catalog_config.catalog_name,
+            schema_name=schema_name,
+            object_name="",
+            object_type="schema",
+            status=status,
+            start_time=start_time.isoformat(),
+            end_time=end_time.isoformat(),
+            duration_seconds=duration,
+            error_message=error_msg,
+            details={
+                "share_name": backup_config.share_name,
+                "backup_catalog": backup_config.backup_catalog,
+                "backup_share_name": backup_config.backup_share_name,
+            },
+            attempt_number=attempt,
+            max_attempts=max_attempts,
+        )
 
     def _backup_table(
         self,

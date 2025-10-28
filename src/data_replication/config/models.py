@@ -38,6 +38,7 @@ class AuditConfig(BaseModel):
     """Configuration for audit tables"""
 
     audit_table: str
+    create_audit_catalog: Optional[bool] = False
     audit_catalog_location: Optional[str] = None
 
 
@@ -86,6 +87,7 @@ class BackupConfig(BaseModel):
     create_share: Optional[bool] = False
     add_to_share: Optional[bool] = True
     share_name: Optional[str] = None
+    create_backup_catalog: Optional[bool] = False
     backup_catalog: Optional[str] = None
     backup_catalog_location: Optional[str] = None
     backup_share_name: Optional[str] = None
@@ -106,6 +108,7 @@ class ReplicationConfig(BaseModel):
     create_shared_catalog: Optional[bool] = False
     share_name: Optional[str] = None
     source_catalog: Optional[str] = None
+    create_intermediate_catalog: Optional[bool] = False
     intermediate_catalog: Optional[str] = None
     intermediate_catalog_location: Optional[str] = None
     enforce_schema: Optional[bool] = True

@@ -115,6 +115,7 @@ class ConfigLoader:
                 validated_schemas = []
                 for schema_name in schema_names:
                     # Handle target_tables override
+                    validated_tables = []
                     if target_tables_override:
                         # Parse comma-separated table names
                         table_names = [
@@ -122,8 +123,6 @@ class ConfigLoader:
                             for name in target_tables_override.split(",")
                         ]
 
-                        # Create table configs
-                        validated_tables = []
                         for table_name in table_names:
                             if table_name:
                                 validated_tables.append(
@@ -131,7 +130,7 @@ class ConfigLoader:
                                 )
 
                     validated_schemas.append(
-                        SchemaConfig(schema_name=schema_name, tables=validated_tables)                        
+                        SchemaConfig(schema_name=schema_name, tables=validated_tables)
                     )
 
                 # Apply override to all target catalogs

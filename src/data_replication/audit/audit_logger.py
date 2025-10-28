@@ -10,8 +10,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from databricks.connect import DatabricksSession
-from pyspark.sql.types import (DoubleType, IntegerType, StringType,
-                               StructField, StructType, TimestampType)
+from pyspark.sql.types import (
+    DoubleType,
+    IntegerType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
+)
 
 from data_replication.audit.logger import DataReplicationLogger
 from data_replication.databricks_operations import DatabricksOperations
@@ -26,6 +32,7 @@ class AuditLogger:
         db_ops: DatabricksOperations,
         logger: DataReplicationLogger,
         run_id: str,
+        create_audit_catalog: bool,
         audit_table: str,
         audit_catalog_location: Optional[str] = None,
         config_details: Optional[Dict[str, Any]] = None,
@@ -44,6 +51,7 @@ class AuditLogger:
         self.db_ops = db_ops
         self.logger = logger
         self.run_id = run_id
+        self.create_audit_table = create_audit_catalog
         self.audit_table = audit_table
         self.audit_catalog_location = audit_catalog_location
         self.config_details_json = (
@@ -59,9 +67,9 @@ class AuditLogger:
             self.execution_user = "unknown"
 
         # Create audit table during instantiation
-        self.create_audit_table()
+        self._create_audit_table()
 
-    def create_audit_table(self) -> None:
+    def _create_audit_table(self) -> None:
         """
         Create audit log table for operations.
 
@@ -74,14 +82,16 @@ class AuditLogger:
         if len(audit_parts) >= 2:
             audit_catalog = audit_parts[0]
             audit_schema = audit_parts[1]
-            try:
-                self.db_ops.create_catalog_if_not_exists(
-                    audit_catalog, self.audit_catalog_location
-                )
-            except Exception:
-                self.logger.warning(
-                    f"Failed to create audit catalog {audit_catalog}"
-                )
+
+            if self.create_audit_table:
+                try:
+                    self.db_ops.create_catalog_if_not_exists(
+                        audit_catalog, self.audit_catalog_location
+                    )
+                except Exception:
+                    self.logger.warning(
+                        f"Failed to create audit catalog {audit_catalog}"
+                    )
             self.db_ops.create_schema_if_not_exists(audit_catalog, audit_schema)
         else:
             # Fallback to standard logging if audit table logging fails

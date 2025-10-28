@@ -41,6 +41,7 @@ target_catalogs:
       - schema_name: "bronze_1"
     backup_config:
       enabled: true
+      create_backup_catalog: true
       create_recipient: true
       create_share: true
     replication_config:
