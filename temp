@@ -1,0 +1,7 @@
+alter table aaron.audit.audit_logging rename column table_name to object_name
+
+alter table aaron.audit.audit_logging add column object_type string
+
+alter table  aaron.audit.audit_logging alter column object_type after object_name
+
+update aaron.audit.audit_logging set object_type = 'table' where object_type is null

@@ -7,19 +7,20 @@ different components to log operations to audit tables.
 
 import json
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from databricks.connect import DatabricksSession
 from pyspark.sql.types import (
-    StructType,
-    StructField,
-    StringType,
-    TimestampType,
     DoubleType,
     IntegerType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
 )
-from data_replication.databricks_operations import DatabricksOperations
+
 from data_replication.audit.logger import DataReplicationLogger
+from data_replication.databricks_operations import DatabricksOperations
 
 
 class AuditLogger:
@@ -31,7 +32,9 @@ class AuditLogger:
         db_ops: DatabricksOperations,
         logger: DataReplicationLogger,
         run_id: str,
+        create_audit_catalog: bool,
         audit_table: str,
+        audit_catalog_location: Optional[str] = None,
         config_details: Optional[Dict[str, Any]] = None,
     ):
         """
@@ -48,19 +51,25 @@ class AuditLogger:
         self.db_ops = db_ops
         self.logger = logger
         self.run_id = run_id
+        self.create_audit_table = create_audit_catalog
         self.audit_table = audit_table
-        self.config_details_json = json.dumps(config_details, default=str) if config_details else None
-        
+        self.audit_catalog_location = audit_catalog_location
+        self.config_details_json = (
+            json.dumps(config_details, default=str) if config_details else None
+        )
+
         # Get current execution user using Spark SQL
         try:
-            self.execution_user = spark.sql("SELECT current_user() as user").collect()[0]["user"]
+            self.execution_user = spark.sql("SELECT current_user() as user").collect()[
+                0
+            ]["user"]
         except Exception:
             self.execution_user = "unknown"
 
         # Create audit table during instantiation
-        self.create_audit_table()
+        self._create_audit_table()
 
-    def create_audit_table(self) -> None:
+    def _create_audit_table(self) -> None:
         """
         Create audit log table for operations.
 
@@ -74,7 +83,15 @@ class AuditLogger:
             audit_catalog = audit_parts[0]
             audit_schema = audit_parts[1]
 
-            self.db_ops.create_catalog_if_not_exists(audit_catalog)
+            if self.create_audit_table:
+                try:
+                    self.db_ops.create_catalog_if_not_exists(
+                        audit_catalog, self.audit_catalog_location
+                    )
+                except Exception:
+                    self.logger.warning(
+                        f"Failed to create audit catalog {audit_catalog}"
+                    )
             self.db_ops.create_schema_if_not_exists(audit_catalog, audit_schema)
         else:
             # Fallback to standard logging if audit table logging fails
@@ -91,7 +108,8 @@ class AuditLogger:
             operation_type STRING,
             catalog_name STRING,
             schema_name STRING,
-            table_name STRING,
+            object_name STRING,
+            object_type STRING,
             status STRING,
             start_time TIMESTAMP,
             end_time TIMESTAMP,
@@ -112,7 +130,8 @@ class AuditLogger:
         operation_type: str,
         catalog_name: str,
         schema_name: str,
-        table_name: str,
+        object_name: str,
+        object_type: str,
         status: str,
         start_time: datetime,
         end_time: datetime,
@@ -129,7 +148,8 @@ class AuditLogger:
             operation_type: Type of operation (backup, restore, etc.)
             catalog_name: Catalog name
             schema_name: Schema name
-            table_name: Table name
+            object_name: Object name (table, view, etc.)
+            object_type: Type of object (table, view, etc.)
             status: Operation status
             start_time: Operation start time
             end_time: Operation end time
@@ -146,7 +166,8 @@ class AuditLogger:
                 operation_type,
                 catalog_name,
                 schema_name,
-                table_name,
+                object_name,
+                object_type,
                 status,
                 start_time,
                 end_time,
@@ -168,7 +189,8 @@ class AuditLogger:
                 StructField("operation_type", StringType(), True),
                 StructField("catalog_name", StringType(), True),
                 StructField("schema_name", StringType(), True),
-                StructField("table_name", StringType(), True),
+                StructField("object_name", StringType(), True),
+                StructField("object_type", StringType(), True),
                 StructField("status", StringType(), True),
                 StructField("start_time", TimestampType(), True),
                 StructField("end_time", TimestampType(), True),
@@ -187,4 +209,6 @@ class AuditLogger:
             audit_df.write.mode("append").saveAsTable(self.audit_table)
         except Exception as e:
             # Fallback to standard logging if audit table logging fails
-            self.logger.warning(f"Failed to log to audit table {self.audit_table}: {str(e)}")
+            self.logger.warning(
+                f"Failed to log to audit table {self.audit_table}: {str(e)}"
+            )

@@ -6,18 +6,8 @@ This module provides the primary CLI interface for all replication operations
 including backup, delta share, replication, and reconciliation.
 """
 
-import sys
 import os
-import argparse
-from pathlib import Path
-import time
-import uuid
-from databricks.sdk import WorkspaceClient
-from data_replication.utils import create_spark_session
-from data_replication.audit.logger import DataReplicationLogger
-from data_replication.config.loader import ConfigLoader
-from data_replication.exceptions import ConfigurationError
-from data_replication.providers.provider_factory import ProviderFactory
+import sys
 
 # Determine the parent directory of the current script for module imports
 pwd = ""
@@ -33,9 +23,24 @@ try:
 except NameError:
     # Fallback when running outside Databricks (e.g. local development or tests)
     parent_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+if not parent_folder.startswith("/Workspace"):
+    parent_folder = "/Workspace" + parent_folder
 # Append the framework path to the system path for module resolution
 if parent_folder not in sys.path:
     sys.path.append(parent_folder)
+
+import argparse
+import uuid
+from pathlib import Path
+
+from databricks.sdk import WorkspaceClient
+
+from data_replication.audit.logger import DataReplicationLogger
+from data_replication.config.loader import ConfigLoader
+from data_replication.exceptions import ConfigurationError
+from data_replication.providers.provider_factory import ProviderFactory
+from data_replication.utils import create_spark_session
 
 
 def create_logger(config) -> DataReplicationLogger:
@@ -44,6 +49,96 @@ def create_logger(config) -> DataReplicationLogger:
     if hasattr(config, "logging") and config.logging:
         logger.setup_logging(config.logging)
     return logger
+
+
+def validate_args(args) -> None:
+    """
+    Validate command line arguments according to business rules.
+
+    Args:
+        args: Parsed command line arguments
+
+    Raises:
+        ValueError: If validation rules are violated
+    """
+    # Rule: target-catalog should only contain 1 catalog
+    if args.target_catalog:
+        catalog_names = [name.strip() for name in args.target_catalog.split(",")]
+        catalog_names = [name for name in catalog_names if name]  # Filter empty strings
+        if len(catalog_names) > 1:
+            raise ValueError(
+                f"target-catalog should only contain 1 catalog, but got {len(catalog_names)}: "
+                f"{', '.join(catalog_names)}"
+            )
+
+    # Rule: when target-schema is provided, target-catalog must be provided
+    if args.target_schemas and not args.target_catalog:
+        raise ValueError(
+            "When target-schemas is provided, target-catalog must also be provided"
+        )
+
+    # Rule: when target-tables is provided, target-schemas and target-catalog must be provided
+    if args.target_tables:
+        if not args.target_schemas:
+            raise ValueError(
+                "When target-tables is provided, target-schemas must also be provided"
+            )
+        if not args.target_catalog:
+            raise ValueError(
+                "When target-tables is provided, target-catalog must also be provided"
+            )
+
+    # Rule: if target-tables is provided, target-schemas should only contain 1 schema
+    if args.target_tables and args.target_schemas:
+        schema_names = [name.strip() for name in args.target_schemas.split(",")]
+        schema_names = [name for name in schema_names if name]  # Filter empty strings
+        if len(schema_names) > 1:
+            raise ValueError(
+                f"When target-tables is provided, target-schemas should only contain 1 schema, "
+                f"but got {len(schema_names)}: {', '.join(schema_names)}"
+            )
+
+
+def validate_execution_environment(config, operation, logger) -> int:
+    """Validate configuration requirements based on execution environment and operation."""
+    if config.execute_at == "source" and operation not in ["backup"]:
+        logger.error("When execute_at is 'source', only 'backup' operation is allowed")
+        return 1
+
+    if config.execute_at == "target" and operation in [
+        "backup",
+        "all",
+    ]:
+        if (
+            not config.source_databricks_connect_config.host
+            or not config.source_databricks_connect_config.token
+        ):
+            logger.error(
+                "Source Databricks Connect configuration must be provided for backup operations when execute_at is 'target'"
+            )
+            return 1
+
+    if config.execute_at == "external":
+        if operation in ["backup", "all"]:
+            if (
+                not config.source_databricks_connect_config.host
+                or not config.source_databricks_connect_config.token
+            ):
+                logger.error(
+                    "Source Databricks Connect configuration must be provided for backup operations when execute_at is 'external'"
+                )
+                return 1
+        if operation in ["replication", "reconciliation", "all"]:
+            if (
+                not config.target_databricks_connect_config.host
+                or not config.target_databricks_connect_config.token
+            ):
+                logger.error(
+                    "Target Databricks Connect configuration must be provided for replication and reconciliation operations when execute_at is 'external'"
+                )
+                return 1
+
+    return 0
 
 
 def run_backup_only(
@@ -137,27 +232,60 @@ def main():
         help="Only validate configuration without running operations",
     )
 
+    parser.add_argument("--run-id", type=str, help="Unique Run ID")
+
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be processed without executing operations",
+        "--target-catalog",
+        type=str,
+        help="target catalog name, e.g. catalog1",
     )
 
     parser.add_argument(
-        "--verbose", "-v", action="store_true", help="Enable verbose logging"
+        "--target-schemas",
+        type=str,
+        help="list of schemas separated by comma, e.g. schema1,schema2",
+    )
+
+    parser.add_argument(
+        "--target-tables",
+        type=str,
+        help="list of tables separated by comma, e.g. table1,table2",
+    )
+
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=4,
+        help="maximum number of concurrent tasks, default is 4",
     )
 
     args = parser.parse_args()
 
+    # Validate command line arguments
+    try:
+        validate_args(args)
+    except ValueError as e:
+        print(f"Argument validation error: {e}")
+        return 1
+
     # Validate config file exists
     config_path = Path(args.config_file)
     if not config_path.exists():
-        print(f"Error: Configuration file not found: {config_path}", file=sys.stderr)
+        print(
+            f"Error: Configuration file not found: {config_path}",
+            file=sys.stderr,
+        )
         return 1
 
     try:
         # Load and validate configuration
-        config = ConfigLoader.load_from_file(config_path)
+        config = ConfigLoader.load_from_file(
+            config_path=config_path,
+            target_catalog_override=args.target_catalog,
+            target_schemas_override=args.target_schemas,
+            target_tables_override=args.target_tables,
+            concurrency_override=args.concurrency,
+        )
         logger = create_logger(config)
 
         logger.info(f"Loaded configuration from {config_path}")
@@ -166,28 +294,15 @@ def main():
             logger.info("Configuration validation completed successfully")
             return 0
 
-        if args.dry_run:
-            logger.info("Dry-run mode: showing what would be processed")
-            # Add dry-run logic here
-            return 0
-
-        if config.execute_at == "source" and args.operation not in ["backup"]:
-            logger.error(
-                "When execute_at is 'source', only 'backup' operation is allowed"
-            )
-            return 1
-
-        if config.execute_at == "target" and args.operation in ["backup", "all"]:
-            if (
-                not config.source_databricks_connect_config.host
-                or not config.source_databricks_connect_config.token
-            ):
-                logger.error(
-                    "Source Databricks Connect configuration must be provided for backup operations when execute_at is 'target'"
-                )
-                return 1
+        validation_result = validate_execution_environment(
+            config, args.operation, logger
+        )
+        if validation_result != 0:
+            return validation_result
 
         run_id = str(uuid.uuid4())
+        if args.run_id:
+            run_id = args.run_id
 
         w = WorkspaceClient()
         # Note: In production, tokens should be retrieved from Databricks secrets
@@ -258,11 +373,6 @@ def main():
         #     logger.info("Delta share operations not yet implemented")
 
         if args.operation in ["all", "replication"]:
-            # if args.operation == "all":
-            #     time.sleep(
-            #         120
-            #     )  # Ensure delta share metadata is available before replication
-
             # Check if replication is configured
             replication_catalogs = [
                 cat

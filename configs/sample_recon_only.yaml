@@ -24,7 +24,7 @@ audit_config:
 target_catalogs:
   - catalog_name: "aaron"
     table_types:
-      ["streaming_table", "managed", "external", "view", "materialized_view"]
+      ["streaming_table", "managed", "external"]
     backup_config:
       enabled: false
     replication_config:
@@ -33,7 +33,12 @@ target_catalogs:
       enabled: true
       source_catalog: aaron_azure_shared
       recon_outputs_catalog: aaron_azure_shared_recon_results
+      recon_outputs_schema: recon_outputs
       exclude_columns: ["timestamp", "created_at", "updated_at", "id"]
+      row_count_check: true
+      missing_data_check: true
+      source_filter_expression: "1=1"
+      target_filter_expression: "1=0"
     target_schemas:
       - schema_name: "bronze_1"
         # tables:

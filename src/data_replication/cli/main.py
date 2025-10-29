@@ -18,7 +18,10 @@ def main():
         return main_impl()
     except ImportError as e:
         print(f"Error importing data replication modules: {e}", file=sys.stderr)
-        print("Make sure all dependencies are installed correctly.", file=sys.stderr)
+        print(
+            "Make sure all dependencies are installed correctly.",
+            file=sys.stderr,
+        )
         return 1
     except Exception as e:
         print(f"Error running data replication: {e}", file=sys.stderr)

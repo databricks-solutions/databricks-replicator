@@ -11,6 +11,7 @@ from functools import wraps
 from typing import Optional
 
 from databricks.connect import DatabricksSession
+
 from .audit.logger import DataReplicationLogger
 from .config.models import RetryConfig
 
@@ -71,7 +72,9 @@ def retry_with_logging(
 
                     if attempt < retry_config.max_attempts:
                         if logger and hasattr(logger, "debug"):
-                            logger.debug(f"Waiting {current_delay:.1f}s before retry...")
+                            logger.debug(
+                                f"Waiting {current_delay:.1f}s before retry..."
+                            )
                         time.sleep(current_delay)
                         current_delay *= 2.0  # Exponential backoff
                         if logger and hasattr(logger, "info"):

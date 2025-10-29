@@ -5,21 +5,22 @@ This module provides a factory class that creates provider instances and manages
 the execution of backup, replication, and reconciliation operations.
 """
 
-import uuid
 import json
+import uuid
 from datetime import datetime, timezone
-from typing import List, Optional, Type, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional, Type
 
 from databricks.connect import DatabricksSession
-from ..databricks_operations import DatabricksOperations
-from ..audit.logger import DataReplicationLogger
+
 from ..audit.audit_logger import AuditLogger
+from ..audit.logger import DataReplicationLogger
 from ..config.models import (
     ReplicationSystemConfig,
     RunResult,
     RunSummary,
-    TargetCatalogConfig,
+    TargetCatalogConfig
 )
+from ..databricks_operations import DatabricksOperations
 
 if TYPE_CHECKING:
     from .base_provider import BaseProvider
@@ -75,13 +76,19 @@ class ProviderFactory:
         if self.config.audit_config and self.config.audit_config.audit_table:
             try:
                 # Convert config to dict for logging
-                config_dict = self.config.model_dump() if hasattr(self.config, 'model_dump') else self.config.dict()
+                config_dict = (
+                    self.config.model_dump()
+                    if hasattr(self.config, "model_dump")
+                    else self.config.dict()
+                )
                 self.audit_logger = AuditLogger(
                     spark=self.logging_spark,
                     db_ops=self.db_ops,
                     logger=self.logger,
                     run_id=self.run_id,
+                    create_audit_catalog=self.config.audit_config.create_audit_catalog,
                     audit_table=self.config.audit_config.audit_table,
+                    audit_catalog_location=self.config.audit_config.audit_catalog_location,
                     config_details=config_dict,
                 )
             except Exception as e:
@@ -106,7 +113,10 @@ class ProviderFactory:
             )
         return False
 
-    def create_provider(self, catalog: TargetCatalogConfig) -> "BaseProvider":
+    def create_provider(
+        self,
+        catalog: TargetCatalogConfig
+    ) -> "BaseProvider":
         """Create a provider instance for the given catalog."""
         # Lazy import to avoid circular imports
         from .base_provider import BaseProvider
@@ -147,9 +157,12 @@ class ProviderFactory:
             self.db_ops,
             self.run_id,
             catalog,
+            self.config.source_databricks_connect_config,
+            self.config.target_databricks_connect_config,
             retry_config,
             max_workers,
             timeout_seconds,
+            self.config.external_location_mapping,
         )
 
     def log_run_result(self, result: RunResult) -> None:
@@ -171,7 +184,7 @@ class ProviderFactory:
 
             # Log to standard logger
             table_info = (
-                f"{result.catalog_name}.{result.schema_name}.{result.table_name}"
+                f"{result.catalog_name}.{result.schema_name}.{result.object_name}"
             )
             self.logger.info(
                 f"Operation {result.operation_type} {result.status} for {table_info}"
@@ -184,7 +197,8 @@ class ProviderFactory:
                         operation_type=result.operation_type,
                         catalog_name=result.catalog_name,
                         schema_name=result.schema_name or "",
-                        table_name=result.table_name or "",
+                        object_name=result.object_name or "",
+                        object_type=result.object_type or "",
                         status=result.status,
                         start_time=start_dt,
                         end_time=end_dt,
@@ -246,10 +260,10 @@ class ProviderFactory:
         schemas = set(
             f"{r.catalog_name}.{r.schema_name}" for r in results if r.schema_name
         )
-        tables = set(
-            f"{r.catalog_name}.{r.schema_name}.{r.table_name}"
+        objects = set(
+            f"{r.catalog_name}.{r.schema_name}.{r.object_name}"
             for r in results
-            if r.table_name
+            if r.object_name
         )
 
         success_rate = (
@@ -260,7 +274,7 @@ class ProviderFactory:
         summary_text = (
             f"{operation_type.title()} operation completed in {duration:.1f}s. "
             f"Processed {len(catalogs)} catalogs, {len(schemas)} schemas, "
-            f"{len(tables)} tables. Success rate: {successful_operations}/"
+            f"{len(objects)} objects. Success rate: {successful_operations}/"
             f"{total_operations} ({success_rate:.1f}%)"
         )
 
@@ -272,7 +286,7 @@ class ProviderFactory:
             status=status,
             total_catalogs=len(catalogs),
             total_schemas=len(schemas),
-            total_tables=len(tables),
+            total_tables=len(objects),
             successful_operations=successful_operations,
             failed_operations=failed_operations,
             summary=summary_text,
@@ -321,7 +335,8 @@ class ProviderFactory:
                         operation_type=f"{operation_type}_summary",
                         catalog_name="ALL",
                         schema_name="ALL",
-                        table_name="ALL",
+                        object_name="ALL",
+                        object_type="ALL",
                         status=summary.status,
                         start_time=start_dt,
                         end_time=end_dt,

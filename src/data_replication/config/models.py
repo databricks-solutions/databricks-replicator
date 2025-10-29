@@ -17,8 +17,6 @@ class TableType(str, Enum):
     MANAGED = "managed"
     STREAMING_TABLE = "streaming_table"
     EXTERNAL = "external"
-    VIEW = "view"
-    MATERIALIZED_VIEW = "materialized_view"
 
 
 class ExecuteAt(str, Enum):
@@ -39,21 +37,30 @@ class SecretConfig(BaseModel):
 class AuditConfig(BaseModel):
     """Configuration for audit tables"""
 
-    audit_table: Optional[str] = None
+    audit_table: str
+    create_audit_catalog: Optional[bool] = False
+    audit_catalog_location: Optional[str] = None
 
 
 class DatabricksConnectConfig(BaseModel):
     """Configuration for Databricks Connect."""
 
     name: str
-    host: Optional[str]
-    token: Optional[SecretConfig]
+    sharing_identifier: str
+    host: Optional[str] = None
+    token: Optional[SecretConfig] = None
 
 
 class TableConfig(BaseModel):
     """Configuration for individual tables."""
 
     table_name: str
+
+    @field_validator("table_name")
+    @classmethod
+    def validate_table_name(cls, v):
+        """Convert table name to lowercase."""
+        return v.lower() if v else v
 
 
 class SchemaConfig(BaseModel):
@@ -63,72 +70,93 @@ class SchemaConfig(BaseModel):
     tables: Optional[List[TableConfig]] = None
     exclude_tables: Optional[List[TableConfig]] = None
 
+    @field_validator("schema_name")
+    @classmethod
+    def validate_schema_name(cls, v):
+        """Convert schema name to lowercase."""
+        return v.lower() if v else v
+
 
 class BackupConfig(BaseModel):
     """Configuration for backup operations."""
 
     enabled: bool = True
     source_catalog: Optional[str] = None
+    create_recipient: Optional[bool] = False
+    recipient_name: Optional[str] = None
+    create_share: Optional[bool] = False
+    add_to_share: Optional[bool] = True
+    share_name: Optional[str] = None
+    create_backup_catalog: Optional[bool] = False
     backup_catalog: Optional[str] = None
+    backup_catalog_location: Optional[str] = None
+    backup_share_name: Optional[str] = None
 
-
-# Delta Share support will be enabled in a future release
-# class DeltaShareConfig(BaseModel):
-#     """Configuration for Delta Share operations."""
-
-#     enabled: bool = True
-#     recipient_id: Optional[str] = None
-#     shared_catalog: Optional[str] = '__replication_internal_aaron_to_aws'
-#     share_name: Optional[str] = '__replication_internal_aaron_to_aws'
-#     shared_catalog_name: Optional[str] = '__replication_internal_aaron_from_azure'
-
-#     @model_validator(mode="after")
-#     def validate_deltashare_config(self):
-#         """Validate required fields when delta share is enabled."""
-#         if self.enabled:
-#             required_fields = [
-#                 "recipient_id"
-#             ]
-#             missing_fields = [
-#                 field for field in required_fields if getattr(self, field) is None
-#             ]
-
-#             if missing_fields:
-#                 raise ValueError(
-#                     f"When delta share is enabled, the following fields are "
-#                     f"required: {missing_fields}"
-#                 )
-#         return self
+    @field_validator("source_catalog", "backup_catalog")
+    @classmethod
+    def validate_catalog_names(cls, v):
+        """Convert catalog names to lowercase."""
+        return v.lower() if v else v
 
 
 class ReplicationConfig(BaseModel):
     """Configuration for replication operations."""
 
     enabled: bool = True
+    create_target_catalog: Optional[bool] = False
+    target_catalog_location: Optional[str] = None
+    create_shared_catalog: Optional[bool] = False
+    share_name: Optional[str] = None
     source_catalog: Optional[str] = None
+    create_intermediate_catalog: Optional[bool] = False
     intermediate_catalog: Optional[str] = None
+    intermediate_catalog_location: Optional[str] = None
     enforce_schema: Optional[bool] = True
+    copy_files: Optional[bool] = True
+
+    @field_validator("source_catalog", "intermediate_catalog")
+    @classmethod
+    def validate_catalog_names(cls, v):
+        """Convert catalog names to lowercase."""
+        return v.lower() if v else v
 
 
 class ReconciliationConfig(BaseModel):
     """Configuration for reconciliation operations."""
 
     enabled: bool = True
-    # delta_share_config: Optional[DeltaShareConfig] = None
-    source_catalog: str
-    recon_outputs_catalog: str
+    recon_outputs_catalog: Optional[str] = None
+    recon_outputs_schema: Optional[str] = None
+    recon_catalog_location: Optional[str] = None
+    create_shared_catalog: Optional[bool] = False
+    share_name: Optional[str] = None
+    source_catalog: Optional[str] = None
     schema_check: Optional[bool] = True
     row_count_check: Optional[bool] = True
     missing_data_check: Optional[bool] = True
     exclude_columns: Optional[List[str]] = None
+    source_filter_expression: Optional[str] = None
+    target_filter_expression: Optional[str] = None
+
+    @field_validator("source_catalog", "recon_outputs_catalog")
+    @classmethod
+    def validate_catalog_names(cls, v):
+        """Convert catalog names to lowercase."""
+        return v.lower() if v else v
+
+    @field_validator("recon_outputs_schema")
+    @classmethod
+    def validate_schema_name(cls, v):
+        """Convert schema name to lowercase."""
+        return v.lower() if v else v
 
     @model_validator(mode="after")
     def validate_reconciliation_config(self):
         """Validate required fields when reconciliation is enabled."""
         if self.enabled:
             required_fields = [
-                "source_catalog",
                 "recon_outputs_catalog",
+                "recon_outputs_schema",
             ]
             missing_fields = [
                 field for field in required_fields if getattr(self, field) is None
@@ -146,27 +174,56 @@ class TargetCatalogConfig(BaseModel):
     """Configuration for target catalogs."""
 
     catalog_name: str
-    table_types: List[TableType] = Field(
-        default_factory=lambda: [TableType.MANAGED, TableType.STREAMING_TABLE]
-    )
+    table_types: List[TableType]
+    target_schemas: Optional[List[SchemaConfig]] = None
     schema_filter_expression: Optional[str] = None
     backup_config: Optional[BackupConfig] = None
-    # delta_share_config: Optional[DeltaShareConfig] = None
     replication_config: Optional[ReplicationConfig] = None
     reconciliation_config: Optional[ReconciliationConfig] = None
-    target_schemas: Optional[List[SchemaConfig]] = None
+
+    @field_validator("catalog_name")
+    @classmethod
+    def validate_catalog_name(cls, v):
+        """Convert catalog name to lowercase."""
+        return v.lower() if v else v
 
     @model_validator(mode="after")
     def validate_catalog_config(self):
         """
-        Validate that at least one of schema_filter_expression or target_schemas
-        is provided.
+        Validate catalog configuration including streaming table constraints.
         """
         if not self.schema_filter_expression and not self.target_schemas:
             raise ValueError(
                 "At least one of 'schema_filter_expression' or 'target_schemas' "
                 "must be provided"
             )
+
+        # Validate streaming table constraints
+        has_streaming_table = TableType.STREAMING_TABLE in self.table_types
+        has_other_table_types = (
+            len([t for t in self.table_types if t != TableType.STREAMING_TABLE]) > 0
+        )
+
+        # Streaming tables can't be backed up and replicated with other object types
+        if has_streaming_table and has_other_table_types:
+            if (self.backup_config and self.backup_config.enabled) or (
+                self.replication_config and self.replication_config.enabled
+            ):
+                raise ValueError(
+                    "Streaming tables cannot be backed up and replicated with other object types. "
+                    "Use separate catalog configurations for streaming tables."
+                )
+
+        # backup_catalog should only be set for streaming tables
+        if (
+            not has_streaming_table
+            and self.backup_config
+            and self.backup_config.backup_catalog
+        ):
+            raise ValueError(
+                "backup_catalog should only be set for streaming table configurations"
+            )
+
         return self
 
 
@@ -190,11 +247,11 @@ class LoggingConfig(BaseModel):
     def validate_level(cls, v):
         """Validate logging level."""
         valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-        if v.upper() not in valid_levels:
+        if v.lower() not in valid_levels:
             raise ValueError(
                 f"Invalid logging level: {v}. Must be one of {valid_levels}"
             )
-        return v.upper()
+        return v.lower()
 
     @field_validator("format")
     @classmethod
@@ -220,14 +277,15 @@ class ReplicationSystemConfig(BaseModel):
 
     version: str
     replication_group: str
+    execute_at: ExecuteAt = Field(default=ExecuteAt.TARGET)
     source_databricks_connect_config: DatabricksConnectConfig
     target_databricks_connect_config: DatabricksConnectConfig
     audit_config: AuditConfig
     target_catalogs: List[TargetCatalogConfig]
+    external_location_mapping: Optional[dict] = None
     concurrency: Optional[ConcurrencyConfig] = Field(default_factory=ConcurrencyConfig)
     retry: Optional[RetryConfig] = Field(default_factory=RetryConfig)
     logging: Optional[LoggingConfig] = Field(default_factory=LoggingConfig)
-    execute_at: Optional[ExecuteAt] = Field(default=ExecuteAt.TARGET)
 
     @field_validator("version")
     @classmethod
@@ -249,8 +307,10 @@ class ReplicationSystemConfig(BaseModel):
     def derive_default_catalogs(self):
         """
         Derive default catalogs when not provided in the config.
-        - Backup catalogs: __replication_internal_{catalog_name}_to_{target_databricks_connect_config.name}
-        - Replication source catalogs: __replication_internal_{catalog_name}_from_{source_databricks_connect_config.name}
+        - Backup catalogs: __replication_internal_{catalog_name}_to_{target_name}
+        - Share names: {source_catalog}_to_{target_name}_share
+        - Backup share names: {backup_catalog}_share
+        - Replication source catalogs: __replication_internal_{catalog_name}_from_{source_name}
         """
         target_name = self.target_databricks_connect_config.name
         source_name = self.source_databricks_connect_config.name
@@ -258,19 +318,86 @@ class ReplicationSystemConfig(BaseModel):
         for catalog in self.target_catalogs:
             # Derive default backup catalogs
             if catalog.backup_config and catalog.backup_config.enabled:
-                if catalog.backup_config.backup_catalog is None:
-                    default_backup_catalog = f"__replication_internal_{catalog.catalog_name}_to_{target_name}"
-                    catalog.backup_config.backup_catalog = default_backup_catalog
-                # Derive default backup source catalogs
+                # Derive default source catalogs
                 if catalog.backup_config.source_catalog is None:
                     catalog.backup_config.source_catalog = catalog.catalog_name
 
-            # Derive default replication source catalogs
-            if catalog.replication_config and catalog.replication_config.enabled:
-                if catalog.replication_config.source_catalog is None:
-                    default_source_catalog = f"__replication_internal_{catalog.catalog_name}_from_{source_name}"
-                    catalog.replication_config.source_catalog = default_source_catalog
+                # Default share name
+                default_share_name = (
+                    f"{catalog.backup_config.source_catalog}_to_{target_name}_share"
+                )
 
+                # Assign default share names
+                if (
+                    catalog.backup_config.create_share
+                    or catalog.backup_config.add_to_share
+                ) and catalog.backup_config.share_name is None:
+                    catalog.backup_config.share_name = default_share_name
+
+                # Default backup catalog name for streaming tables
+                default_backup_catalog = (
+                    f"__replication_internal_{catalog.catalog_name}_to_{target_name}"
+                )
+
+                # Assign default backup catalog
+                if (
+                    catalog.backup_config.backup_catalog is None
+                    and catalog.table_types == [TableType.STREAMING_TABLE]
+                ):
+                    catalog.backup_config.backup_catalog = default_backup_catalog
+
+                # Default share name for streaming backup tables
+                default_backup_share_name = (
+                    f"{catalog.backup_config.backup_catalog}_share"
+                )
+
+                if (
+                    (
+                        catalog.backup_config.create_share
+                        or catalog.backup_config.add_to_share
+                    )
+                    and catalog.backup_config.backup_share_name is None
+                    and catalog.backup_config.backup_catalog is not None
+                ):
+                    catalog.backup_config.backup_share_name = default_backup_share_name
+
+                # Derive default recipient names
+                if catalog.backup_config.recipient_name is None:
+                    catalog.backup_config.recipient_name = f"{target_name}_recipient"
+
+            # Derive default replication catalogs
+            if catalog.replication_config and catalog.replication_config.enabled:
+                if (
+                    catalog.replication_config.create_shared_catalog
+                    and catalog.replication_config.share_name is None
+                ):
+                    catalog.replication_config.share_name = (
+                        (
+                            f"__replication_internal_{catalog.catalog_name}_to_{target_name}_share"
+                        )
+                        if catalog.table_types == [TableType.STREAMING_TABLE]
+                        else (f"{catalog.catalog_name}_to_{target_name}_share")
+                    )
+                if catalog.replication_config.source_catalog is None:
+                    catalog.replication_config.source_catalog = (
+                        f"__replication_internal_{catalog.catalog_name}_from_{source_name}"
+                        if catalog.table_types == [TableType.STREAMING_TABLE]
+                        else f"{catalog.catalog_name}_from_{source_name}"
+                    )
+
+            # Derive default reconciliation catalogs
+            if catalog.reconciliation_config and catalog.reconciliation_config.enabled:
+                if (
+                    catalog.reconciliation_config.create_shared_catalog
+                    and catalog.reconciliation_config.share_name is None
+                ):
+                    catalog.reconciliation_config.share_name = (
+                        f"{catalog.catalog_name}_to_{target_name}_share"
+                    )
+                if catalog.reconciliation_config.source_catalog is None:
+                    catalog.reconciliation_config.source_catalog = (
+                        f"{catalog.catalog_name}_from_{source_name}"
+                    )
         return self
 
 
@@ -291,6 +418,18 @@ class AuditLogEntry(BaseModel):
     max_attempts: Optional[int] = None
     config_details: Optional[str] = None  # JSON string of the full configuration
     execution_user: Optional[str] = None  # User who executed the operation
+
+    @field_validator("catalog_name")
+    @classmethod
+    def validate_catalog_name(cls, v):
+        """Convert catalog name to lowercase."""
+        return v.lower() if v else v
+
+    @field_validator("schema_name", "table_name")
+    @classmethod
+    def validate_names(cls, v):
+        """Convert schema and table names to lowercase."""
+        return v.lower() if v else v
 
 
 class RunSummary(BaseModel):
@@ -315,7 +454,8 @@ class RunResult(BaseModel):
     operation_type: str
     catalog_name: str
     schema_name: Optional[str] = None
-    table_name: Optional[str] = None
+    object_name: Optional[str] = None
+    object_type: Optional[str] = None
     status: str  # success, failed
     start_time: str
     end_time: str
@@ -323,3 +463,15 @@ class RunResult(BaseModel):
     details: Optional[dict] = None
     attempt_number: Optional[int] = None
     max_attempts: Optional[int] = None
+
+    @field_validator("catalog_name")
+    @classmethod
+    def validate_catalog_name(cls, v):
+        """Convert catalog name to lowercase."""
+        return v.lower() if v else v
+
+    @field_validator("schema_name", "object_name")
+    @classmethod
+    def validate_names(cls, v):
+        """Convert schema and object names to lowercase."""
+        return v.lower() if v else v

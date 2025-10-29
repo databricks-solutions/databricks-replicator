@@ -6,13 +6,11 @@ provider types like backup, replication, and reconciliation.
 """
 
 from abc import ABC, abstractmethod
-from concurrent.futures import (
-    ThreadPoolExecutor,
-    as_completed,
-    TimeoutError as FuturesTimeoutError,
-)
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from concurrent.futures import as_completed
 from datetime import datetime, timezone
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
 from databricks.connect import DatabricksSession
 from pyspark.sql.utils import AnalysisException
@@ -21,16 +19,17 @@ from ..audit.logger import DataReplicationLogger
 from ..config.models import (
     RetryConfig,
     RunResult,
-    TargetCatalogConfig,
     TableConfig,
+    TargetCatalogConfig,
+    DatabricksConnectConfig,
 )
 from ..databricks_operations import DatabricksOperations
 from ..exceptions import (
-    DataReplicationError,
-    SparkSessionError,
     BackupError,
-    ReplicationError,
+    DataReplicationError,
     ReconciliationError,
+    ReplicationError,
+    SparkSessionError,
 )
 
 
@@ -44,9 +43,12 @@ class BaseProvider(ABC):
         db_ops: DatabricksOperations,
         run_id: str,
         catalog_config: TargetCatalogConfig,
+        source_databricks_config: DatabricksConnectConfig,
+        target_databricks_config: DatabricksConnectConfig,
         retry: Optional[RetryConfig] = None,
         max_workers: int = 2,
         timeout_seconds: int = 1800,
+        external_location_mapping: Optional[dict] = None,
     ):
         """
         Initialize the base provider.
@@ -66,11 +68,14 @@ class BaseProvider(ABC):
         self.db_ops = db_ops
         self.run_id = run_id
         self.catalog_config = catalog_config
+        self.source_databricks_config = source_databricks_config
+        self.target_databricks_config = target_databricks_config
         self.retry = (
             retry if retry else RetryConfig(max_attempts=1, retry_delay_seconds=5)
         )
         self.max_workers = max_workers
         self.timeout_seconds = timeout_seconds
+        self.external_location_mapping = external_location_mapping
         self.catalog_name: Optional[str] = None
 
     @abstractmethod
@@ -86,7 +91,8 @@ class BaseProvider(ABC):
         context: str,
         catalog_name: str,
         schema_name: str = "",
-        table_name: str = "",
+        object_name: str = "",
+        object_type: str = "table",
         start_time: datetime = None,
     ) -> RunResult:
         """
@@ -97,14 +103,15 @@ class BaseProvider(ABC):
             context: Context description (e.g., "processing table", "processing schema")
             catalog_name: Catalog name
             schema_name: Schema name (optional)
-            table_name: Table name (optional)
+            object_name: Object name (optional)
+            object_type: Object type (optional)
             start_time: Operation start time
 
         Returns:
             RunResult with failed status
         """
         if isinstance(e, (FuturesTimeoutError, TimeoutError)):
-            error_msg = f"Timeout {context} {catalog_name}.{schema_name}.{table_name} after {self.timeout_seconds}s"
+            error_msg = f"Timeout {context} {catalog_name}.{schema_name}.{object_name} after {self.timeout_seconds}s"
             self.logger.error(error_msg)
         elif isinstance(
             e,
@@ -117,14 +124,14 @@ class BaseProvider(ABC):
                 ReconciliationError,
             ),
         ):
-            error_msg = f"Failed to {context} {catalog_name}.{schema_name}.{table_name}: {str(e)}"
+            error_msg = f"Failed to {context} {catalog_name}.{schema_name}.{object_name}: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
         else:
-            error_msg = f"Unexpected error {context} {catalog_name}.{schema_name}.{table_name}: {str(e)}"
+            error_msg = f"Unexpected error {context} {catalog_name}.{schema_name}.{object_name}: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
 
         return self._create_failed_result(
-            catalog_name, schema_name, table_name, error_msg, start_time
+            catalog_name, schema_name, object_name, object_type, error_msg, start_time
         )
 
     @abstractmethod
@@ -183,18 +190,27 @@ class BaseProvider(ABC):
             self.catalog_name = self.setup_operation_catalogs()
 
             self.logger.info(
-                f"Starting {self.get_operation_name()}: {self.catalog_name}->{self.catalog_config.catalog_name}",
-                extra={"run_id": self.run_id, "operation": self.get_operation_name()},
-            )
-            # Ensure target catalog exists
-            self.db_ops.create_catalog_if_not_exists(
-                self.catalog_config.catalog_name
+                f"Starting {self.get_operation_name()} catalog: {self.catalog_name}",
+                extra={
+                    "run_id": self.run_id,
+                    "operation": self.get_operation_name(),
+                },
             )
 
             # Get schemas to process
             schema_list = self._get_schemas()
+            self.logger.info(
+                f"Starting {self.get_operation_name()} schemas: {schema_list}"
+            )
 
             for schema_name, table_list in schema_list:
+                self.logger.info(
+                    f"Starting {self.get_operation_name()} schema: {schema_name}",
+                    extra={
+                        "run_id": self.run_id,
+                        "operation": self.get_operation_name(),
+                    },
+                )
                 schema_results = self.process_schema_concurrently(
                     schema_name, table_list
                 )
@@ -205,7 +221,10 @@ class BaseProvider(ABC):
                 e,
                 f"{self.get_operation_name()} catalog",
                 self.catalog_config.catalog_name,
-                start_time=start_time,
+                "",
+                "",
+                "catalog",
+                start_time,
             )
             results.append(result)
 
@@ -234,14 +253,16 @@ class BaseProvider(ABC):
 
             if not tables:
                 self.logger.info(
-                    f"No tables found in schema {catalog_name}.{schema_name}"
+                    f"No tables found in schema {self.catalog_name}.{schema_name}"
                 )
                 return results
 
             self.logger.info(
                 f"Starting concurrent {self.get_operation_name()} of {len(tables)} tables "
-                f"in schema {catalog_name}.{schema_name} using {self.max_workers} workers"
+                f"in schema {self.catalog_name}.{schema_name} using {self.max_workers} workers"
             )
+
+            self.logger.info(f"Tables {tables}")
 
             # Process tables concurrently within the schema
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -279,13 +300,20 @@ class BaseProvider(ABC):
                             catalog_name,
                             schema_name,
                             table_name,
+                            "table",
                             start_time,
                         )
                         results.append(result)
 
         except Exception as e:
             result = self._handle_exception(
-                e, "processing schema", catalog_name, schema_name, start_time=start_time
+                e,
+                "processing schema",
+                catalog_name,
+                schema_name,
+                "",
+                "schema",
+                start_time,
             )
             results.append(result)
 
@@ -295,7 +323,8 @@ class BaseProvider(ABC):
         self,
         catalog_name: str,
         schema_name: str,
-        table_name: Optional[str] = None,
+        object_name: Optional[str] = None,
+        object_type: Optional[str] = None,
         error_msg: str = "",
         start_time: Optional[datetime] = None,
     ) -> RunResult:
@@ -305,7 +334,8 @@ class BaseProvider(ABC):
         Args:
             catalog_name: Catalog name
             schema_name: Schema name
-            table_name: Optional table name
+            object_name: Optional object name
+            object_type: Optional object type
             error_msg: Error message
             start_time: Operation start time
 
@@ -319,7 +349,8 @@ class BaseProvider(ABC):
             operation_type=self.get_operation_name(),
             catalog_name=catalog_name,
             schema_name=schema_name,
-            table_name=table_name,
+            object_name=object_name,
+            object_type=object_type,
             status="failed",
             start_time=start_time.isoformat(),
             end_time=datetime.now(timezone.utc).isoformat(),
@@ -345,12 +376,14 @@ class BaseProvider(ABC):
                     schema.tables or [],
                 )
                 for schema in self.catalog_config.target_schemas
+                if self.db_ops.refresh_schema_metadata(f"{self.catalog_name}.{schema.schema_name}")
+                and self.spark.catalog.databaseExists(f"{self.catalog_name}.{schema.schema_name}")
             ]
 
         if self.catalog_config.schema_filter_expression:
             # Use schema filter expression
             schema_list = self.db_ops.get_schemas_by_filter(
-                self.catalog_config.catalog_name,
+                self.catalog_name,
                 self.catalog_config.schema_filter_expression,
             )
         else:
@@ -359,9 +392,7 @@ class BaseProvider(ABC):
 
         return [(item, []) for item in schema_list]
 
-    def _get_tables(
-        self, schema_name: str, table_list: List[TableConfig]
-    ) -> List[str]:
+    def _get_tables(self, schema_name: str, table_list: List[TableConfig]) -> List[str]:
         """
         Get list of tables to process in a schema based on configuration.
 
@@ -394,5 +425,10 @@ class BaseProvider(ABC):
         # Apply exclusions first
         tables = [table for table in tables if table not in exclude_names]
 
-        # Then filter by table type (STREAMING_TABLE and MANAGED only)
-        return self.db_ops.filter_tables_by_type(self.catalog_name, schema_name, tables, self.catalog_config.table_types)
+        # Then filter by table types
+        return self.db_ops.filter_tables_by_type(
+            self.catalog_name,
+            schema_name,
+            tables,
+            self.catalog_config.table_types,
+        )

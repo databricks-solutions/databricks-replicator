@@ -1,35 +1,40 @@
 # Data Replication System for Databricks
 
-A comprehensive data replication system for Databricks with support for backup, replication, and reconciliation of Delta Live Tables (DLT) and regular Delta tables across different cloud and metastores.
+A Python plug-in solution to replicate data between Databricks envs. Support and accelerate workloads in multi-cloud migration, single-cloud migration, workspace migration, DR, backup and recovery, multi-cloud data mesh.
+
+Cloud agnostic - cross cloud, cross region
 
 ## Overview
 
-This system provides incremental data replication capabilities between Databricks metastores, with specialized handling for Delta Live Tables (DLT). It supports multiple operation types that can be run independently or together:
+This system provides incremental data replication capabilities between Databricks metastores with D2D Delta Share, with specialized handling for Streaming Tables. It supports multiple operation types that can be run independently or together:
 
-- **Backup**: Deep clone operations from DLT internal tables to backup catalogs
-- **Replication**: Cross-metastore incremental table replication with schema enforcement
+- **Backup**: Export Streaming Table backing tables and add tables to Share
+- **Replication**: Cross-metastore/same metastore incremental table replication with schema enforcement
 - **Reconciliation**: Data validation with row counts, schema checks, and missing data detection
 
 ## Supported Object Types
-- Streaming Tables (data only, not checkpoints)
+- Streaming Tables (data only, no checkpoints)
 - Managed Table
+- External Table
 
 ## Unsupported Object Types
-- External Table
+- Volume Files - WIP
+- SQL Views - WIP
 - Materialized Views
-- SQL Views
-- Checkpointing for streaming tables
 
 ## Key Features
 
-### Incremental Data Refresh
+### Delta Sharing
+Option to let the tool setup Delta share automatically for you, i.e. Recipient, Shares and Shared Catalogs. Or BYO Delta share infra
+
+### Incremental Data Replication
 The system leverages Deep Clone for incrementality
 
-### DLT Table Handling
-The system automatically handles Delta Live Tables complexities:
-- Extracts pipeline IDs using `DESCRIBE DETAIL` on DLT tables
+### Streaming Table Handling
+The system automatically handles Streaming Tables complexities:
+- Export ST backing tables
 - Constructs internal table path using pipeline ID
-- Performs operations on internal tables rather than DLT tables directly
+- Deep clone ST backing tables rather than ST tables directly
 
 ### Robust Error Handling
 - Configurable retry logic with exponential backoff using tenacity
@@ -39,156 +44,78 @@ The system automatically handles Delta Live Tables complexities:
 
 ### Flexible Configuration
 - YAML-based configuration with Pydantic validation
-- Support for multiple catalogs with different operation configurations
+- CLI args to override YAML configuration
 - Schema and table filtering capabilities
 - Configurable concurrency and timeout settings
 
 ## Installation
 
 ### Prerequisites
-- Access to Databricks workspaces
-- Appropriate permissions for table operations and secret access
-- Cloud Token based D2D Delta Sharing Enabled
-- DLT Streaming tables already exist in target
-- Delta Sharing shares and catalog created with all schemas added for replication - to be automated in future
-- Source and target SP PAT and Databricks secrets created if executed outside Databricks
+- Source and target User or Service Principal with metastore admin and workspace admin access
+- OAuth Token stored in Databricks secrets created if executed at client env instead of Databricks
+- For Streaming Table replication, tables need to already exist in target DBX
+- For cross-metastore replication, enable Delta Sharing (DS) across clouds. https://docs.databricks.com/aws/en/delta-sharing/set-up#gsc.tab=0
 
 
-### Setup
 
-1. Clone the repository:
+### Getting Started
+
+1. Setup dev env:
 ```bash
 git clone <repository-url>
-cd data_replication
+cd <repository folder>
+make setup
 ```
 
-2. Create and activate virtual environment:
-```bash
-python3 -m venv .venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+2. Create first configuration - Follow README.yaml and sample configs in configs folder
 
-3. Install dependencies:
-```bash
-pip install -r requirements-dev.txt
-```
-
-4. Install the package in development mode:
-```bash
-pip install -e .
-```
-
-## Configuration
-
-Create a YAML configuration file (see `configs/config.yaml` for example):
-
-```yaml
-version: "1.0"
-replication_group: "my_test_group"
-
-# Source Databricks Connect configuration
-source_databricks_connect_config:
-  name: "source_workspace"
-  host: "https://source-databricks-instance"
-  token:
-    secret_scope: "my_secret_scope"
-    secret_key: "source_token_key"
-
-# Target Databricks Connect configuration  
-target_databricks_connect_config:
-  name: "target_workspace"
-  host: "https://target-databricks-instance"
-  token:
-    secret_scope: "my_secret_scope"
-    secret_key: "target_token_key"
-
-# Audit configuration
-audit_config:
-  audit_table: "my_catalog.audit.replication_logs"
-
-# Target catalogs configuration
-target_catalogs:
-  - catalog_name: "my_catalog"
-    schema_filter_expression: "databaseName like 'prod_%'"
-    
-    backup_config:
-      enabled: true
-      source_catalog: "source_catalog"
-      backup_catalog: "backup_catalog"
-    
-    replication_config:
-      enabled: true
-      source_catalog: "shared_catalog"
-      intermediate_catalog: "staging_catalog"
-      enforce_schema: true
-      
-    reconciliation_config:
-      enabled: true
-      source_catalog: "source_catalog"
-      recon_outputs_catalog: "recon_results"
-      schema_check: true
-      row_count_check: true
-      missing_data_check: true
-    
-    target_schemas:
-      - schema_name: "prod_schema1"
-      - schema_name: "prod_schema2"
-        tables:
-          - table_name: "important_table"
-        exclude_tables:
-          - table_name: "temp_table"
-
-# Performance settings
-concurrency:
-  max_workers: 4
-  timeout_seconds: 3600
-
-retry:
-  max_attempts: 3
-  retry_delay_seconds: 5
-```
-
-## Usage
-
-### Command Line Interface
-
-The system provides a CLI tool `data-replicator` with the following commands:
+3. Run - the system provides a CLI tool `data-replicator` with the following commands:
 
 ```bash
+# Check all available args
+data-replicator --help
+
 # Run all enabled operations
-data-replicator config.yaml
-
-# Run specific operation only
-data-replicator config.yaml --operation backup
-data-replicator config.yaml --operation replication
-data-replicator config.yaml --operation reconciliation
+data-replicator <config.yaml>
 
 # Validate configuration without running
-data-replicator config.yaml --validate-only
+data-replicator <config.yaml> --validate-only
 
-# Dry run to preview operations
-data-replicator config.yaml --dry-run
+# Run all enabled operations against targeted catalog and schemas
+data-replicator <config.yaml>  --target-catalog aaron --target-schemas bronze_1,bronze_2
 
-# Combine dry run with specific operation
-data-replicator config.yaml --operation backup --dry-run
+# Run with different concurrency
+data-replicator <config.yaml> --concurrency 10
 
-# Enable verbose logging
-data-replicator config.yaml --verbose
+# Run specific operation only
+data-replicator <config.yaml> --operation backup
+data-replicator <config.yaml> --operation replication
+data-replicator <config.yaml> --operation reconciliation
 ```
 
 ### Operation Types
-
 #### Backup Operations
-Deep clones tables from source to backup catalogs, handling DLT internal tables automatically.
+- For ST, deep clones ST backing tables from source to backup catalogs.
+- Add schemas to share.
 
 #### Replication Operations  
-Replicates tables across workspaces with schema enforcement and Delta Sharing integration.
+- Deep clone tables across workspaces from share with schema enforcement
 
 #### Reconciliation Operations
-Validates data consistency between source and target with configurable checks:
 - Row count validation
 - Schema structure comparison  
 - Missing data detection
+## Development
+
+### Code Quality Tools
+```bash
+make quality
+```
+
+### Testing
+```bash
+make test
+```
 
 ## Architecture
 
@@ -207,40 +134,13 @@ Each operation type is implemented as a provider:
 - **ReconciliationProvider**: Performs data validation checks
 - **ProviderFactory**: Creates and manages provider instances
 
-## Development
-
-### Code Quality Tools
-```bash
-# Format code
-black src/ tests/
-
-# Sort imports  
-isort src/ tests/
-
-# Type checking
-mypy src/
-
-# Lint code
-flake8 src/ tests/
-
-# Run all quality checks
-black src/ tests/ && isort src/ tests/ && flake8 src/ tests/ && mypy src/
-```
-
-### Testing
-```bash
-# Run all tests with coverage
-pytest
-
-# Run specific test types
-pytest -m unit      # Unit tests only
-pytest -m integration  # Integration tests only
-pytest -m slow      # Slow running tests
-
-# Run tests with detailed coverage report
-pytest --cov=data_replication --cov-report=html --cov-report=term-missing
-```
-
+### Audit Logging
+All operations are logged to the configured audit table with:
+- Unique run IDs for correlation
+- Operation types and statuses
+- Error details and stack traces
+- Timing and performance metrics
+- 
 ## Security Considerations
 
 - All sensitive credentials are managed through Databricks secret scopes
@@ -252,17 +152,8 @@ pytest --cov=data_replication --cov-report=html --cov-report=term-missing
 
 ### Common Issues
 
-1. **DLT Table Access**: Ensure the system has access to `__databricks_internal` catalog for DLT operations
+1. **DLT Table Access**: Ensure the system has access to `__databricks_internal` catalog for ST backing table operations
 2. **Token Permissions**: Verify secret scope access and token permissions for cross-workspace operations
-3. **Catalog Creation**: Some environments may not support automatic catalog creation
-4. **Schema Filtering**: Check filter expressions if schemas are not being processed as expected
-
-### Audit Logging
-All operations are logged to the configured audit table with:
-- Unique run IDs for correlation
-- Operation types and statuses
-- Error details and stack traces
-- Timing and performance metrics
 
 ## Contributing
 

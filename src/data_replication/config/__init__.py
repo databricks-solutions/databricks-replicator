@@ -6,26 +6,21 @@ using Pydantic models.
 """
 
 from data_replication.config.loader import ConfigLoader
-from data_replication.config.models import (
-    AuditConfig,
-    BackupConfig,
-    ConcurrencyConfig,
-    DatabricksConnectConfig,
-    LoggingConfig,
-    ReconciliationConfig,
-    ReplicationConfig,
-    ReplicationSystemConfig,
-    RetryConfig,
-    SchemaConfig,
-    SecretConfig,
-    TableConfig,
-    TargetCatalogConfig,
-)
+from data_replication.config.models import (AuditConfig, BackupConfig,
+                                            ConcurrencyConfig,
+                                            DatabricksConnectConfig,
+                                            LoggingConfig,
+                                            ReconciliationConfig,
+                                            ReplicationConfig,
+                                            ReplicationSystemConfig,
+                                            RetryConfig, SchemaConfig,
+                                            SecretConfig, TableConfig,
+                                            TargetCatalogConfig)
 
 __all__ = [
     "ConfigLoader",
     "AuditConfig",
-    "BackupConfig", 
+    "BackupConfig",
     "ConcurrencyConfig",
     "DatabricksConnectConfig",
     "LoggingConfig",
