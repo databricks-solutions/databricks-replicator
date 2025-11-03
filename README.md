@@ -6,9 +6,9 @@ Cloud agnostic - cross metastore or same metastore replication
 
 ## Overview
 
-This system provides incremental data replication capabilities between Databricks metastores with D2D Delta Share, with specialized handling for Streaming Tables. It supports multiple operation types that can be run independently or together:
+This system provides incremental data replication capabilities between Databricks env or within same env with D2D Delta Share and deep clone, with specialized handling for Streaming Tables. It supports multiple operation types that can be run independently or together:
 
-- **Backup**: Export Streaming Table backing tables and add tables to Share
+- **Backup**: Export Streaming Table backing tables and add delta tables to Share
 - **Replication**: Cross-metastore/same metastore incremental table replication with schema enforcement
 - **Reconciliation**: Data validation with row counts, schema checks, and missing data detection
 
@@ -19,10 +19,12 @@ This system provides incremental data replication capabilities between Databrick
 
 ## WIP
 - Volume Files
-- Table Tags
-- Catalog & Tags
-- Schema & Tags
-- SQL Views
+- UC metadata
+  - Table Tags
+  - Catalog & Tags
+  - Schema & Tags
+  - SQL Views
+  - Volumes
 
 ## Unsupported Object Types
 - Materialized Views
