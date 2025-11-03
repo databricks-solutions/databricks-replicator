@@ -70,30 +70,27 @@ class ProviderFactory:
         self.logger = logger
         self.run_id = run_id or str(uuid.uuid4())
         self.db_ops = DatabricksOperations(spark)
+        self.db_ops_logging = DatabricksOperations(logging_spark)
 
         # Initialize AuditLogger if audit table is configured
         self.audit_logger: Optional[AuditLogger] = None
         if self.config.audit_config and self.config.audit_config.audit_table:
-            try:
-                # Convert config to dict for logging
-                config_dict = (
-                    self.config.model_dump()
-                    if hasattr(self.config, "model_dump")
-                    else self.config.dict()
-                )
-                self.audit_logger = AuditLogger(
-                    spark=self.logging_spark,
-                    db_ops=self.db_ops,
-                    logger=self.logger,
-                    run_id=self.run_id,
-                    create_audit_catalog=self.config.audit_config.create_audit_catalog,
-                    audit_table=self.config.audit_config.audit_table,
-                    audit_catalog_location=self.config.audit_config.audit_catalog_location,
-                    config_details=config_dict,
-                )
-            except Exception as e:
-                self.logger.warning(f"Failed to initialize AuditLogger: {str(e)}")
-                self.audit_logger = None
+            # Convert config to dict for logging
+            config_dict = (
+                self.config.model_dump()
+                if hasattr(self.config, "model_dump")
+                else self.config.dict()
+            )
+            self.audit_logger = AuditLogger(
+                spark=self.logging_spark,
+                db_ops=self.db_ops_logging,
+                logger=self.logger,
+                run_id=self.run_id,
+                create_audit_catalog=self.config.audit_config.create_audit_catalog,
+                audit_table=self.config.audit_config.audit_table,
+                audit_catalog_location=self.config.audit_config.audit_catalog_location,
+                config_details=config_dict,
+            )
 
     def get_operation_name(self) -> str:
         """Get the name of the operation for logging purposes."""

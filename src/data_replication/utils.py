@@ -16,14 +16,18 @@ from .audit.logger import DataReplicationLogger
 from .config.models import RetryConfig
 
 
-def create_spark_session(host, token) -> DatabricksSession:
+def create_spark_session(host, token, cluster_id) -> DatabricksSession:
     """Create a Databricks Spark session using the provided host and token."""
     if host and token:
         os.environ["DATABRICKS_HOST"] = host
         os.environ["DATABRICKS_TOKEN"] = token
+    if cluster_id:
+        os.environ["DATABRICKS_CLUSTER_ID"] = cluster_id
+        spark = DatabricksSession.builder.getOrCreate()
+        return spark
+
     # Create Databricks session with serverless compute
     spark = DatabricksSession.builder.serverless(True).getOrCreate()
-
     return spark
 
 

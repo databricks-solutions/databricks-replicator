@@ -245,6 +245,7 @@ class ReplicationProvider(BaseProvider):
                     status="success",
                     start_time=start_time.isoformat(),
                     end_time=end_time.isoformat(),
+                    duration_seconds=duration,
                     details={
                         "target_table": actual_target_table,
                         "source_table": source_table,
@@ -294,6 +295,7 @@ class ReplicationProvider(BaseProvider):
 
         except Exception as e:
             end_time = datetime.now(timezone.utc)
+            duration = (end_time - start_time).total_seconds()
 
             # Wrap in ReplicationError for better error categorization
             if not isinstance(e, ReplicationError):
@@ -314,6 +316,7 @@ class ReplicationProvider(BaseProvider):
                 status="failed",
                 start_time=start_time.isoformat(),
                 end_time=end_time.isoformat(),
+                duration_seconds=duration,
                 error_message=error_msg,
                 details={
                     "target_table": actual_target_table,

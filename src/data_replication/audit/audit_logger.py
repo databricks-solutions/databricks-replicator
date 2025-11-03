@@ -88,10 +88,11 @@ class AuditLogger:
                     self.db_ops.create_catalog_if_not_exists(
                         audit_catalog, self.audit_catalog_location
                     )
-                except Exception:
-                    self.logger.warning(
+                except Exception as e:
+                    self.logger.error(
                         f"Failed to create audit catalog {audit_catalog}"
                     )
+                    raise e
             self.db_ops.create_schema_if_not_exists(audit_catalog, audit_schema)
         else:
             # Fallback to standard logging if audit table logging fails

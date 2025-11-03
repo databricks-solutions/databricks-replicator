@@ -83,13 +83,42 @@ class ConfigLoader:
                         "dashes, and underscores"
                     )
 
-                # Apply override to all target catalogs
+                # Generate TargetCatalogConfig with target_catalog_override and replication group level configs
+                filtered_catalogs = []
                 if "target_catalogs" in config_data:
-                    for catalog in config_data["target_catalogs"]:
-                        catalog_copy = catalog.copy()
-                        catalog_copy["catalog_name"] = target_catalog_override
-                        break
-                    config_data["target_catalogs"] = [catalog_copy]
+                    filtered_catalogs = [
+                        catalog
+                        for catalog in config_data["target_catalogs"]
+                        if catalog.get("catalog_name") == target_catalog_override
+                    ]
+
+                # If no matching catalog found, create one with replication group level configs
+                if not filtered_catalogs:
+                    new_catalog = {"catalog_name": target_catalog_override}
+
+                    # Inherit table_types from replication group level
+                    if "table_types" in config_data:
+                        new_catalog["table_types"] = config_data["table_types"]
+
+                    # Inherit backup_config from replication group level
+                    if "backup_config" in config_data:
+                        new_catalog["backup_config"] = config_data["backup_config"]
+
+                    # Inherit replication_config from replication group level
+                    if "replication_config" in config_data:
+                        new_catalog["replication_config"] = config_data[
+                            "replication_config"
+                        ]
+
+                    # Inherit reconciliation_config from replication group level
+                    if "reconciliation_config" in config_data:
+                        new_catalog["reconciliation_config"] = config_data[
+                            "reconciliation_config"
+                        ]
+
+                    filtered_catalogs = [new_catalog]
+
+                config_data["target_catalogs"] = filtered_catalogs
 
             except ValidationError as e:
                 raise ConfigurationError(

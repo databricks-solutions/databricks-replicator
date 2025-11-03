@@ -2,13 +2,13 @@
 
 A Python plug-in solution to replicate data between Databricks envs. Support and accelerate workloads in multi-cloud migration, single-cloud migration, workspace migration, DR, backup and recovery, multi-cloud data mesh.
 
-Cloud agnostic - cross cloud, cross region
+Cloud agnostic - cross metastore or same metastore replication
 
 ## Overview
 
-This system provides incremental data replication capabilities between Databricks metastores with D2D Delta Share, with specialized handling for Streaming Tables. It supports multiple operation types that can be run independently or together:
+This system provides incremental data replication capabilities between Databricks env or within same env with D2D Delta Share and deep clone, with specialized handling for Streaming Tables. It supports multiple operation types that can be run independently or together:
 
-- **Backup**: Export Streaming Table backing tables and add tables to Share
+- **Backup**: Export Streaming Table backing tables and add delta tables to Share
 - **Replication**: Cross-metastore/same metastore incremental table replication with schema enforcement
 - **Reconciliation**: Data validation with row counts, schema checks, and missing data detection
 
@@ -17,9 +17,16 @@ This system provides incremental data replication capabilities between Databrick
 - Managed Table
 - External Table
 
+## WIP
+- Volume Files
+- UC metadata
+  - Table Tags
+  - Catalog & Tags
+  - Schema & Tags
+  - SQL Views
+  - Volumes
+
 ## Unsupported Object Types
-- Volume Files - WIP
-- SQL Views - WIP
 - Materialized Views
 
 ## Key Features
@@ -52,11 +59,9 @@ The system automatically handles Streaming Tables complexities:
 
 ### Prerequisites
 - Source and target User or Service Principal with metastore admin and workspace admin access
-- OAuth Token stored in Databricks secrets created if executed at client env instead of Databricks
+- OAuth Token stored in Databricks secrets created
 - For Streaming Table replication, tables need to already exist in target DBX
 - For cross-metastore replication, enable Delta Sharing (DS) across clouds. https://docs.databricks.com/aws/en/delta-sharing/set-up#gsc.tab=0
-
-
 
 ### Getting Started
 
@@ -75,22 +80,25 @@ make setup
 # Check all available args
 data-replicator --help
 
-# Run all enabled operations
-data-replicator <config.yaml>
-
 # Validate configuration without running
 data-replicator <config.yaml> --validate-only
 
-# Run all enabled operations against targeted catalog and schemas
-data-replicator <config.yaml>  --target-catalog aaron --target-schemas bronze_1,bronze_2
+# Run all enabled operations against targeted catalog
+data-replicator <config.yaml>  --target-catalog catalog1
+
+# Run all enabled operations against targeted schemas
+data-replicator <config.yaml>  --target-catalog catalog1 --target-schemas bronze_1,bronze_2
+
+# Run all enabled operations against targeted tables
+data-replicator <config.yaml>  --target-catalog catalog1 --target-schemas bronze_1 --target-tables table1,table2
 
 # Run with different concurrency
-data-replicator <config.yaml> --concurrency 10
+data-replicator <config.yaml>  --target-catalog catalog1 --concurrency 10
 
 # Run specific operation only
-data-replicator <config.yaml> --operation backup
-data-replicator <config.yaml> --operation replication
-data-replicator <config.yaml> --operation reconciliation
+data-replicator <config.yaml> --operation backup --target-catalog catalog1
+data-replicator <config.yaml> --operation replication --target-catalog catalog1
+data-replicator <config.yaml> --operation reconciliation --target-catalog catalog1
 ```
 
 ### Operation Types
@@ -105,8 +113,8 @@ data-replicator <config.yaml> --operation reconciliation
 - Row count validation
 - Schema structure comparison  
 - Missing data detection
+- 
 ## Development
-
 ### Code Quality Tools
 ```bash
 make quality

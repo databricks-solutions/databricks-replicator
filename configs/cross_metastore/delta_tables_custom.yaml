@@ -2,10 +2,11 @@
 # 2. Backup with existing backup catalog and share names.
 # 3. Replication from existing shared catalog.
 # 4. Reconciliation from existing shared catalog
+# 5. use {target_catalogs.catalog_name} to reference target catalog name
 
 version: "1.0"
 
-replication_group: "aaron_test_group2"
+replication_group: "delta_tables_custom"
 
 execute_at: "target"
 
@@ -29,26 +30,18 @@ external_location_mapping:
   "abfss://aaboode@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/aaboode/"
 
 audit_config:
-  audit_table: "aaron.audit.audit_logging"
+  audit_table: "data_replication.audit.audit_logging"
 
-target_catalogs:
-  - catalog_name: "aaron"
-    table_types: ["external"]
-    target_schemas:
-      - schema_name: "default"
-        tables:
-          - table_name: "external_table_example"
-    backup_config:
-      enabled: true
-      share_name: "aaron"
-    replication_config:
-      enabled: true
-      source_catalog: "aaron_azure_shared"
-    reconciliation_config:
-      enabled: true
-      source_catalog: aaron_azure_shared
-      recon_outputs_catalog: aaron_azure_shared_recon_results
-      recon_outputs_schema: recon_outputs
+table_types: ["external", "managed"]
+backup_config:
+  enabled: true
+  share_name: "{target_catalogs.catalog_name}_share"
+replication_config:
+  enabled: true
+  source_catalog: "{target_catalogs.catalog_name}_share_{source_databricks_connect_config.name}"
+reconciliation_config:
+  enabled: true
+  source_catalog: "{target_catalogs.catalog_name}_share_{source_databricks_connect_config.name}"
 
 concurrency:
   max_workers: 5

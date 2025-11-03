@@ -21,6 +21,14 @@ class BackupProvider(BaseProvider):
         """Get the name of the operation for logging purposes."""
         return "backup"
 
+    def get_backup_schema_name(self, schema_name: str) -> str:
+        """Get the backup schema name with prefix applied."""
+        backup_config = self.catalog_config.backup_config
+        if backup_config and backup_config.backup_catalog:
+            prefix = backup_config.backup_schema_prefix or ""
+            return f"{prefix}{schema_name}"
+        return None
+
     def is_operation_enabled(self) -> bool:
         """Check if the backup operation is enabled in the configuration."""
         return (
@@ -41,14 +49,15 @@ class BackupProvider(BaseProvider):
                 f"""Creating backup catalog: {backup_config.backup_catalog} at location: {backup_config.backup_catalog_location}"""
             )
             try:
-                self.db_ops.create_catalog(
+                self.db_ops.create_catalog_if_not_exists(
                     backup_config.backup_catalog,
                     backup_config.backup_catalog_location,
                 )
-            except Exception:
-                self.logger.warning(
-                    f"""Failed to create backup catalog: {backup_config.backup_catalog}."""
+            except Exception as e:
+                self.logger.error(
+                    f"""Failed to create backup catalog: {backup_config.backup_catalog}. Error: {e}"""
                 )
+                raise e
 
         # Create delta share recipient if configured
         if backup_config.create_recipient:
@@ -99,7 +108,7 @@ class BackupProvider(BaseProvider):
         # Ensure schema exists in backup catalog before processing
         if backup_config.backup_catalog:
             self.db_ops.create_schema_if_not_exists(
-                backup_config.backup_catalog, schema_name
+                backup_config.backup_catalog, self.get_backup_schema_name(schema_name)
             )
 
         results = []
@@ -124,6 +133,7 @@ class BackupProvider(BaseProvider):
         attempt = 1
         max_attempts = 1
         status = "success"
+        backup_schema_name = self.get_backup_schema_name(schema_name)
 
         try:
             if backup_config.add_to_share:
@@ -141,15 +151,15 @@ class BackupProvider(BaseProvider):
                 # Ensure schema exists in backup catalog before processing
                 if backup_config.backup_catalog and backup_config.backup_share_name:
                     self.logger.info(
-                        f"""Adding schema {backup_config.backup_catalog}.{schema_name} to backup delta share: {backup_config.backup_share_name}"""
+                        f"""Adding schema {backup_config.backup_catalog}.{backup_schema_name} to backup delta share: {backup_config.backup_share_name}"""
                     )
                     self.db_ops.add_schema_to_share(
                         backup_config.backup_share_name,
                         backup_config.backup_catalog,
-                        schema_name,
+                        backup_schema_name,
                     )
         except Exception as e:
-            self.logger.error( 
+            self.logger.error(
                 f"Failed to add schema {schema_name} to shares: {str(e)}",
                 extra={"run_id": self.run_id, "operation": "backup"},
                 exc_info=True,
@@ -173,7 +183,9 @@ class BackupProvider(BaseProvider):
             details={
                 "share_name": backup_config.share_name,
                 "backup_catalog": backup_config.backup_catalog,
+                "backup_schema_name": backup_schema_name,
                 "backup_share_name": backup_config.backup_share_name,
+                "backup_schema_prefix": backup_config.backup_schema_prefix,
             },
             attempt_number=attempt,
             max_attempts=max_attempts,
@@ -199,7 +211,10 @@ class BackupProvider(BaseProvider):
         source_catalog = backup_config.source_catalog
 
         source_table = f"{source_catalog}.{schema_name}.{table_name}"
-        backup_table = None
+        backup_schema_name = self.get_backup_schema_name(schema_name)
+        backup_table = (
+            f"{backup_config.backup_catalog}.{backup_schema_name}.{table_name}"
+        )
         actual_source_table = None
         dlt_flag = None
         backup_query = None
@@ -214,9 +229,6 @@ class BackupProvider(BaseProvider):
             dlt_flag = table_details["is_dlt"]
 
             if backup_config.backup_catalog:
-                backup_table = (
-                    f"{backup_config.backup_catalog}.{schema_name}.{table_name}"
-                )
                 self.logger.info(
                     f"Starting backup: {source_table} -> {backup_table}",
                     extra={"run_id": self.run_id, "operation": "backup"},
@@ -264,50 +276,55 @@ class BackupProvider(BaseProvider):
                     status="success",
                     start_time=start_time.isoformat(),
                     end_time=end_time.isoformat(),
-                    details={
-                        "backup_table": backup_table,
-                        "source_table": actual_source_table,
-                        "table_type": source_table_type,
-                        "backup_query": backup_query,
-                        "dlt_flag": dlt_flag,
-                    },
-                    attempt_number=attempt,
-                    max_attempts=max_attempts,
-                )
-            else:
-                error_msg = (
-                    f"Backup failed after {max_attempts} attempts: "
-                    f"{source_table} -> {backup_table}"
-                )
-                if last_exception:
-                    error_msg += f" | Last error: {str(last_exception)}"
-
-                self.logger.error(
-                    error_msg,
-                    extra={"run_id": self.run_id, "operation": "backup"},
-                )
-
-                return RunResult(
-                    operation_type="backup",
-                    catalog_name=source_catalog,
-                    schema_name=schema_name,
-                    object_name=table_name,
-                    object_type="table",
-                    status="failed",
-                    start_time=start_time.isoformat(),
-                    end_time=end_time.isoformat(),
                     duration_seconds=duration,
-                    error_message=error_msg,
                     details={
                         "backup_table": backup_table,
+                        "backup_schema_name": backup_schema_name,
                         "source_table": actual_source_table,
                         "table_type": source_table_type,
                         "backup_query": backup_query,
+                        "backup_schema_prefix": backup_config.backup_schema_prefix,
                         "dlt_flag": dlt_flag,
                     },
                     attempt_number=attempt,
                     max_attempts=max_attempts,
                 )
+
+            error_msg = (
+                f"Backup failed after {max_attempts} attempts: "
+                f"{source_table} -> {backup_table}"
+            )
+            if last_exception:
+                error_msg += f" | Last error: {str(last_exception)}"
+
+            self.logger.error(
+                error_msg,
+                extra={"run_id": self.run_id, "operation": "backup"},
+            )
+
+            return RunResult(
+                operation_type="backup",
+                catalog_name=source_catalog,
+                schema_name=schema_name,
+                object_name=table_name,
+                object_type="table",
+                status="failed",
+                start_time=start_time.isoformat(),
+                end_time=end_time.isoformat(),
+                duration_seconds=duration,
+                error_message=error_msg,
+                details={
+                    "backup_table": backup_table,
+                    "backup_schema_name": backup_schema_name,
+                    "source_table": actual_source_table,
+                    "table_type": source_table_type,
+                    "backup_query": backup_query,
+                    "backup_schema_prefix": backup_config.backup_schema_prefix,
+                    "dlt_flag": dlt_flag,
+                },
+                attempt_number=attempt,
+                max_attempts=max_attempts,
+            )
 
         except Exception as e:
             end_time = datetime.now(timezone.utc)
@@ -328,7 +345,8 @@ class BackupProvider(BaseProvider):
                 operation_type="backup",
                 catalog_name=source_catalog,
                 schema_name=schema_name,
-                table_name=table_name,
+                object_name=table_name,
+                object_type="table",
                 status="failed",
                 start_time=start_time.isoformat(),
                 end_time=end_time.isoformat(),
@@ -336,9 +354,11 @@ class BackupProvider(BaseProvider):
                 error_message=error_msg,
                 details={
                     "backup_table": backup_table,
+                    "backup_schema_name": backup_schema_name,
                     "source_table": actual_source_table,
                     "table_type": source_table_type,
                     "backup_query": backup_query,
+                    "backup_schema_prefix": backup_config.backup_schema_prefix,
                     "dlt_flag": dlt_flag,
                 },
                 attempt_number=attempt,

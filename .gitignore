@@ -16,6 +16,5 @@ scratch/**
 *.log
 .env
 .claude/
-terraform-exporter/
-terraform-import*/
+terraform*/
 .coverage

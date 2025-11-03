@@ -8,7 +8,7 @@ row count validation, and missing data detection between source and target table
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from ..config.models import  RunResult
+from ..config.models import RunResult
 from ..exceptions import ReconciliationError, TableNotFoundError
 from ..utils import retry_with_logging
 from .base_provider import BaseProvider
@@ -46,13 +46,14 @@ class ReconciliationProvider(BaseProvider):
     def setup_operation_catalogs(self) -> str:
         """Setup reconciliation-specific catalogs."""
         reconciliation_config = self.catalog_config.reconciliation_config
-        self.logger.info(
-            f"""Creating recon result catalog: {reconciliation_config.recon_outputs_catalog} at location: {reconciliation_config.recon_catalog_location}"""
-        )
-        self.db_ops.create_catalog_if_not_exists(
-            reconciliation_config.recon_outputs_catalog,
-            reconciliation_config.recon_catalog_location
-        )
+        if reconciliation_config.create_recon_catalog:
+            self.logger.info(
+                f"""Creating recon result catalog: {reconciliation_config.recon_outputs_catalog} at location: {reconciliation_config.recon_catalog_location}"""
+            )
+            self.db_ops.create_catalog_if_not_exists(
+                reconciliation_config.recon_outputs_catalog,
+                reconciliation_config.recon_catalog_location,
+            )
 
         # Create source catalog from share if needed
         if reconciliation_config.create_shared_catalog:
@@ -66,7 +67,7 @@ class ReconciliationProvider(BaseProvider):
                 reconciliation_config.source_catalog,
                 provider_name,
                 reconciliation_config.share_name,
-            )        
+            )
         return reconciliation_config.source_catalog
 
     def process_schema_concurrently(

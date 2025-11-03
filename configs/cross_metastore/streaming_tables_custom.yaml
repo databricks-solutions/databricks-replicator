@@ -2,10 +2,11 @@
 # 2. Backup with existing backup catalog and share names.
 # 3. Replication from existing shared catalog.
 # 4. Reconciliation from existing shared catalog
+# 5. use {target_catalogs.catalog_name} to reference target catalog name
 
 version: "1.0"
 
-replication_group: "aaron_test_group2"
+replication_group: "streaming_tables_custom"
 
 execute_at: "target"
 
@@ -26,19 +27,21 @@ target_databricks_connect_config:
     secret_key: "pat_target"
 
 audit_config:
-  audit_table: "aaron.audit.audit_logging"
+  audit_table: "data_replication.audit.audit_logging"
 
 target_catalogs:
   - catalog_name: "aaron"
-    table_types: ["managed"]
+    table_types: ["streaming_table"]
     target_schemas:
       - schema_name: "bronze_1"
     backup_config:
       enabled: true
       share_name: "aaron"
+      backup_catalog: "aaron_dr"
+      backup_share_name: "aaron_dr_azure"
     replication_config:
       enabled: true
-      source_catalog: "aaron_azure_shared"
+      source_catalog: "aaron_dr_azure_shared"
     reconciliation_config:
       enabled: true
       source_catalog: aaron_azure_shared

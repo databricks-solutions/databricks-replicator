@@ -1,11 +1,11 @@
-# 1. Create delta share infrastructure in this toolincluding recipient, shares and catalogs with default system generated names.
+# 1. Create delta share infrastructure in this tool including recipient, shares and shared catalogs with default system generated names.
 # 2. Enable backup with default system generated backup catalog and share names.
 # 3. Enable replication with default system generated shared catalog
 # 4. Enable reconciliation with default system generated shared catalog
 
 version: "1.0"
 
-replication_group: "aaron_test_group2"
+replication_group: "delta_tables_defaults"
 
 execute_at: "target"
 
@@ -26,30 +26,22 @@ target_databricks_connect_config:
     secret_key: "pat_target"
 
 external_location_mapping:
-  "abfss://aaboode@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/aaboode/"
+  "abfss://aaboode@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/aaron2"
 
 audit_config:
-  audit_table: "aaron.audit.audit_logging"
+  audit_table: "data_replication.audit.audit_logging"
 
-target_catalogs:
-  - catalog_name: "aaron"
-    table_types: ["external"]
-    target_schemas:
-      - schema_name: "default"
-        tables:
-          - table_name: "external_table_example"
-    backup_config:
-      enabled: true
-      create_recipient: true
-      create_share: true
-    replication_config:
-      enabled: true
-      create_shared_catalog: true
-    reconciliation_config:
-      enabled: true
-      create_shared_catalog: true
-      recon_outputs_catalog: aaron_azure_shared_recon_results
-      recon_outputs_schema: recon_outputs
+table_types: ["external", "managed"]
+backup_config:
+  enabled: true
+  create_recipient: true
+  create_share: true
+replication_config:
+  enabled: true
+  create_shared_catalog: true
+reconciliation_config:
+  enabled: true
+  create_shared_catalog: true
 
 concurrency:
   max_workers: 5
