@@ -27,7 +27,9 @@ class DatabricksOperations:
         """
         self.spark = spark
 
-    def create_catalog_if_not_exists(self, catalog_name: str, catalog_location: str) -> None:
+    def create_catalog_if_not_exists(
+        self, catalog_name: str, catalog_location: str
+    ) -> None:
         """
         Create catalog if it doesn't exist.
 
@@ -37,9 +39,11 @@ class DatabricksOperations:
         """
         try:
             if catalog_location:
-                self.spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog_name} MANAGED LOCATION '{catalog_location}'")
+                self.spark.sql(
+                    f"CREATE CATALOG IF NOT EXISTS `{catalog_name}` MANAGED LOCATION '{catalog_location}'"
+                )
             else:
-                self.spark.sql(f"CREATE CATALOG IF NOT EXISTS {catalog_name}")
+                self.spark.sql(f"CREATE CATALOG IF NOT EXISTS `{catalog_name}`")
         except Exception as e:
             raise Exception(f"""Failed to create catalog: {str(e)}""") from e
 
@@ -56,11 +60,11 @@ class DatabricksOperations:
         """
         try:
             self.spark.sql(
-                f"CREATE CATALOG IF NOT EXISTS {catalog_name} USING SHARE {provider_name}.{share_name}"
+                f"CREATE CATALOG IF NOT EXISTS `{catalog_name}` USING SHARE `{provider_name}`.`{share_name}`"
             )
         except Exception as e:
             raise Exception(f"""
-                            Failed to create catalog: {str(e)} using share {provider_name}.{share_name}
+                            Failed to create catalog: {str(e)} using share `{provider_name}`.`{share_name}`
             """) from e
 
     def create_schema_if_not_exists(self, catalog_name: str, schema_name: str) -> None:
@@ -72,7 +76,7 @@ class DatabricksOperations:
             schema_name: Name of the schema to create
         """
         try:
-            full_schema = f"{catalog_name}.{schema_name}"
+            full_schema = f"`{catalog_name}`.`{schema_name}`"
             self.spark.sql(f"CREATE SCHEMA IF NOT EXISTS {full_schema}")
         except Exception as e:
             raise Exception(f"""Failed to create schema: {str(e)}""") from e
@@ -89,7 +93,7 @@ class DatabricksOperations:
             List of table names
         """
         try:
-            full_schema = f"{catalog_name}.{schema_name}"
+            full_schema = f"`{catalog_name}`.`{schema_name}`"
 
             # Get visible tables using SHOW TABLES (excludes internal tables)
             show_tables_df = self.spark.sql(f"SHOW TABLES IN {full_schema}").filter(
@@ -123,7 +127,9 @@ class DatabricksOperations:
         return [
             table
             for table in table_names
-            if self.get_table_type(f"{catalog_name}.{schema_name}.{table}").lower()
+            if self.get_table_type(
+                f"`{catalog_name}`.`{schema_name}`.`{table}`"
+            ).lower()
             in [type.lower() for type in table_types]
         ]
 
@@ -138,7 +144,7 @@ class DatabricksOperations:
             List of schema names
         """
         try:
-            schemas_df = self.spark.sql(f"SHOW SCHEMAS IN {catalog_name}").filter(
+            schemas_df = self.spark.sql(f"SHOW SCHEMAS IN `{catalog_name}`").filter(
                 'databaseName != "information_schema"'
             )
             return [row.databaseName for row in schemas_df.collect()]
@@ -158,7 +164,7 @@ class DatabricksOperations:
             True if schema exists, False otherwise
         """
         # Retry to refresh schema metadata in delta share catalog
-        return self.spark.catalog.databaseExists(schema_name)
+        return self.spark.catalog.databaseExists(f"`{schema_name}`")
 
     def get_schemas_by_filter(
         self, catalog_name: str, filter_expression: str
@@ -175,7 +181,7 @@ class DatabricksOperations:
         """
         try:
             # Get all schemas first
-            schemas_df = self.spark.sql(f"SHOW SCHEMAS IN {catalog_name}").filter(
+            schemas_df = self.spark.sql(f"SHOW SCHEMAS IN `{catalog_name}`").filter(
                 'databaseName != "information_schema"'
             )
 
@@ -184,7 +190,7 @@ class DatabricksOperations:
 
             return [row.databaseName for row in filtered_df.collect()]
         except Exception as e:
-            print(f"Warning: Could not filter schemas in {catalog_name}: {e}")
+            print(f"Warning: Could not filter schemas in `{catalog_name}`: {e}")
             return []
 
     def describe_table_detail(self, table_name: str) -> dict:
@@ -347,7 +353,7 @@ class DatabricksOperations:
         """
 
         # Extract table name from full table name
-        table_name_only = table_name.split(".")[-1]
+        table_name_only = table_name.split(".")[-1].replace("`", "")
 
         # Construct internal table name
         pipeline_id_underscores = pipeline_id.replace("-", "_")
@@ -359,7 +365,7 @@ class DatabricksOperations:
         internal_schema_name = f"__dlt_materialization_schema_{pipeline_id_underscores}"
 
         # Get catalog from original table name
-        catalog_name = table_name.split(".")[0]
+        catalog_name = table_name.split(".")[0].replace("`", "")
 
         # Check possible locations for the internal table 1
         full_internal_table_name = (
@@ -378,8 +384,9 @@ class DatabricksOperations:
             return full_internal_table_name
 
         # Check possible locations for the internal table 3
+        schema_name = table_name.split(".")[1].replace("`", "")
         full_internal_table_name = (
-            f"{catalog_name}.{table_name.split('.')[1]}.`{internal_table_name}`"
+            f"`{catalog_name}`.`{schema_name}`.`{internal_table_name}`"
         )
         # print(full_internal_table_name)
         if self.spark.catalog.tableExists(full_internal_table_name):
@@ -473,13 +480,13 @@ class DatabricksOperations:
             if existing_recipient:
                 return existing_recipient
 
-            create_query = f"CREATE RECIPIENT IF NOT EXISTS {recipient_name} USING ID '{sharing_identifier}'"
+            create_query = f"CREATE RECIPIENT IF NOT EXISTS `{recipient_name}` USING ID '{sharing_identifier}'"
             self.spark.sql(create_query)
             return recipient_name
 
         except Exception as e:
             raise Exception(
-                f"""Failed to create recipient '{recipient_name}' for '{sharing_identifier}': {str(e)}"""
+                f"""Failed to create recipient `{recipient_name}` for '{sharing_identifier}': {str(e)}"""
             ) from e
 
     def create_delta_share(self, share_name: str, recipient_name: str) -> None:
@@ -495,19 +502,19 @@ class DatabricksOperations:
         """
         try:
             # Create the share
-            create_share_query = f"CREATE SHARE IF NOT EXISTS {share_name}"
+            create_share_query = f"CREATE SHARE IF NOT EXISTS `{share_name}`"
             self.spark.sql(create_share_query)
 
             # Grant SELECT and READ_VOLUME permissions to recipient
             grant_select_query = (
-                f"GRANT SELECT ON SHARE {share_name} TO RECIPIENT `{recipient_name}`"
+                f"GRANT SELECT ON SHARE `{share_name}` TO RECIPIENT `{recipient_name}`"
             )
 
             self.spark.sql(grant_select_query)
 
         except Exception as e:
             raise Exception(
-                f"""Failed to create delta share '{share_name}' or grant permissions to '{recipient_name}': {str(e)}"""
+                f"""Failed to create delta share `{share_name}` or grant permissions to `{recipient_name}`: {str(e)}"""
             ) from e
 
     def is_schema_in_share(
@@ -526,11 +533,12 @@ class DatabricksOperations:
         """
         try:
             # Default schema is always included in shares
-            if schema_name == 'default':
+            if schema_name == "default":
                 return True
-            
+
+            full_schema_name = f"`{catalog_name}`.`{schema_name}`"
+            show_share_query = f"SHOW ALL IN SHARE `{share_name}`"
             full_schema_name = f"{catalog_name}.{schema_name}"
-            show_share_query = f"SHOW ALL IN SHARE {share_name}"
             result = (
                 self.spark.sql(show_share_query)
                 .filter(f'''
@@ -545,7 +553,7 @@ class DatabricksOperations:
 
         except Exception as e:
             print(
-                f"""Warning: Could not check if schema {catalog_name}.{schema_name} is in share {share_name}: {e}"""
+                f"""Warning: Could not check if schema `{catalog_name}.{schema_name}` is in share `{share_name}`: {e}"""
             )
             return False
 
@@ -568,13 +576,15 @@ class DatabricksOperations:
             if self.is_schema_in_share(share_name, catalog_name, schema_name):
                 return
 
-            full_schema_name = f"{catalog_name}.{schema_name}"
-            add_schema_query = f"ALTER SHARE {share_name} ADD SCHEMA {full_schema_name}"
+            full_schema_name = f"`{catalog_name}`.`{schema_name}`"
+            add_schema_query = (
+                f"ALTER SHARE `{share_name}` ADD SCHEMA {full_schema_name}"
+            )
             self.spark.sql(add_schema_query)
 
         except Exception as e:
             raise Exception(
-                f"""Failed to add schema '{catalog_name}.{schema_name}' to share '{share_name}': {str(e)}"""
+                f"""Failed to add schema `{catalog_name}.{schema_name}` to share `{share_name}`: {str(e)}"""
             ) from e
 
     def get_provider_name(self, sharing_identifier: str) -> str:
@@ -612,7 +622,7 @@ class DatabricksOperations:
             List of volume names
         """
         try:
-            full_schema = f"{catalog_name}.{schema_name}"
+            full_schema = f"`{catalog_name}`.`{schema_name}`"
 
             # Get visible volumes using SHOW VOLUMES
             show_volumes_df = self.spark.sql(f"SHOW VOLUMES IN {full_schema}")
@@ -644,7 +654,9 @@ class DatabricksOperations:
         return [
             volume
             for volume in volume_names
-            if self.get_volume_type(f"{catalog_name}.{schema_name}.{volume}").lower()
+            if self.get_volume_type(
+                f"`{catalog_name}`.`{schema_name}`.`{volume}`"
+            ).lower()
             in [vol_type.lower() for vol_type in volume_types]
         ]
 
@@ -661,13 +673,13 @@ class DatabricksOperations:
         try:
             # Use DESCRIBE VOLUME to get volume information
             describe_df = self.spark.sql(f"DESCRIBE VOLUME {volume_name}")
-            
+
             # Look for the volume type in the describe output
-            volume_type = describe_df.select('volume_type').collect()[0][0]
+            volume_type = describe_df.select("volume_type").collect()[0][0]
             if volume_type:
                 return volume_type.upper()
             return None
-            
+
         except Exception as e:
             print(f"Warning: Could not determine volume type for {volume_name}: {e}")
             return None

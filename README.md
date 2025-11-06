@@ -70,6 +70,7 @@ The system automatically handles Streaming Tables complexities:
 git clone <repository-url>
 cd <repository folder>
 make setup
+source .venv/bin/activate
 ```
 
 2. Create first configuration - Follow README.yaml and sample configs in configs folder

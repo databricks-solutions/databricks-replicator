@@ -3,7 +3,7 @@
 Main entry point for the data replication system.
 
 This module provides the primary CLI interface for all replication operations
-including backup, delta share, replication, and reconciliation.
+including backup, delta share, replication, reconciliation, and UC replication.
 """
 
 import os
@@ -103,27 +103,31 @@ def validate_args(args) -> None:
             )
 
 
-def run_backup_only(
+def run_backup(
     config, logger, logging_spark, run_id: str, w: WorkspaceClient
 ) -> int:
     """Run only backup operations."""
-    source_host = config.source_databricks_connect_config.host
-    source_token = None
-    source_cluster_id = config.source_databricks_connect_config.cluster_id
-    if config.source_databricks_connect_config.token:
-        source_token = w.dbutils.secrets.get(
-            config.source_databricks_connect_config.token.secret_scope,
-            config.source_databricks_connect_config.token.secret_key,
-        )
-    # create and validate Spark sessions
-    spark = create_spark_session(source_host, source_token, source_cluster_id)
-    if not validate_spark_session(spark, get_workspace_url_from_host(source_host)):
-        logger.error(
-            "Spark session is not connected to the configured source workspace"
-        )
-        raise ConfigurationError(
-            "Spark session is not connected to the configured source workspace"
-        )
+    if config.audit_config.logging_workspace == "source":
+        spark = logging_spark
+    else:
+        # Create source Spark session
+        source_host = config.source_databricks_connect_config.host
+        source_token = None
+        source_cluster_id = config.source_databricks_connect_config.cluster_id
+        if config.source_databricks_connect_config.token:
+            source_token = w.dbutils.secrets.get(
+                config.source_databricks_connect_config.token.secret_scope,
+                config.source_databricks_connect_config.token.secret_key,
+            )
+        # create and validate Spark sessions
+        spark = create_spark_session(source_host, source_token, source_cluster_id)
+        if not validate_spark_session(spark, get_workspace_url_from_host(source_host)):
+            logger.error(
+                "Spark session is not connected to the configured source workspace"
+            )
+            raise ConfigurationError(
+                "Spark session is not connected to the configured source workspace"
+            )
 
     backup_factory = ProviderFactory(
         "backup", config, spark, logging_spark, logger, run_id
@@ -138,26 +142,30 @@ def run_backup_only(
     return 0
 
 
-def run_replication_only(
+def run_replication(
     config, logger, logging_spark, run_id: str, w: WorkspaceClient
 ) -> int:
     """Run only replication operations."""
-    target_host = config.target_databricks_connect_config.host
-    target_token = None
-    target_cluster_id = config.target_databricks_connect_config.cluster_id
-    if config.target_databricks_connect_config.token:
-        target_token = w.dbutils.secrets.get(
-            config.target_databricks_connect_config.token.secret_scope,
-            config.target_databricks_connect_config.token.secret_key,
-        )
-    spark = create_spark_session(target_host, target_token, target_cluster_id)
-    if not validate_spark_session(spark, get_workspace_url_from_host(target_host)):
-        logger.error(
-            "Spark session is not connected to the configured target workspace"
-        )
-        raise ConfigurationError(
-            "Spark session is not connected to the configured target workspace"
-        )
+    if config.audit_config.logging_workspace == "target":
+        spark = logging_spark
+    else:
+        # Create target Spark session
+        target_host = config.target_databricks_connect_config.host
+        target_token = None
+        target_cluster_id = config.target_databricks_connect_config.cluster_id
+        if config.target_databricks_connect_config.token:
+            target_token = w.dbutils.secrets.get(
+                config.target_databricks_connect_config.token.secret_scope,
+                config.target_databricks_connect_config.token.secret_key,
+            )
+        spark = create_spark_session(target_host, target_token, target_cluster_id)
+        if not validate_spark_session(spark, get_workspace_url_from_host(target_host)):
+            logger.error(
+                "Spark session is not connected to the configured target workspace"
+            )
+            raise ConfigurationError(
+                "Spark session is not connected to the configured target workspace"
+            )
 
     replication_factory = ProviderFactory(
         "replication", config, spark, logging_spark, logger, run_id
@@ -172,26 +180,30 @@ def run_replication_only(
     return 0
 
 
-def run_reconciliation_only(
+def run_reconciliation(
     config, logger, logging_spark, run_id: str, w: WorkspaceClient
 ) -> int:
     """Run only reconciliation operations."""
-    target_host = config.target_databricks_connect_config.host
-    target_token = None
-    target_cluster_id = config.target_databricks_connect_config.cluster_id
-    if config.target_databricks_connect_config.token:
-        target_token = w.dbutils.secrets.get(
-            config.target_databricks_connect_config.token.secret_scope,
-            config.target_databricks_connect_config.token.secret_key,
-        )
-    spark = create_spark_session(target_host, target_token, target_cluster_id)
-    if not validate_spark_session(spark, get_workspace_url_from_host(target_host)):
-        logger.error(
-            "Spark session is not connected to the configured target workspace"
-        )
-        raise ConfigurationError(
-            "Spark session is not connected to the configured target workspace"
-        )
+    if config.audit_config.logging_workspace == "target":
+        spark = logging_spark
+    else:
+        # Create target Spark session
+        target_host = config.target_databricks_connect_config.host
+        target_token = None
+        target_cluster_id = config.target_databricks_connect_config.cluster_id
+        if config.target_databricks_connect_config.token:
+            target_token = w.dbutils.secrets.get(
+                config.target_databricks_connect_config.token.secret_scope,
+                config.target_databricks_connect_config.token.secret_key,
+            )
+        spark = create_spark_session(target_host, target_token, target_cluster_id)
+        if not validate_spark_session(spark, get_workspace_url_from_host(target_host)):
+            logger.error(
+                "Spark session is not connected to the configured target workspace"
+            )
+            raise ConfigurationError(
+                "Spark session is not connected to the configured target workspace"
+            )
 
     reconciliation_factory = ProviderFactory(
         "reconciliation", config, spark, logging_spark, logger, run_id
@@ -208,6 +220,46 @@ def run_reconciliation_only(
     return 0
 
 
+def run_uc_replication(
+    config, logger, logging_spark, run_id: str, w: WorkspaceClient
+) -> int:
+    """Run only UC replication operations."""
+    if config.audit_config.logging_workspace == "source":
+        spark = logging_spark
+    else:
+        # Create source Spark session
+        source_host = config.source_databricks_connect_config.host
+        source_token = None
+        source_cluster_id = config.source_databricks_connect_config.cluster_id
+        if config.source_databricks_connect_config.token:
+            source_token = w.dbutils.secrets.get(
+                config.source_databricks_connect_config.token.secret_scope,
+                config.source_databricks_connect_config.token.secret_key,
+            )
+        spark = create_spark_session(source_host, source_token, source_cluster_id)
+        if not validate_spark_session(spark, get_workspace_url_from_host(source_host)):
+            logger.error(
+                "Source Spark session is not connected to the configured source workspace"
+            )
+            raise ConfigurationError(
+                "Source Spark session is not connected to the configured source workspace"
+            )
+
+    uc_replication_factory = ProviderFactory(
+        "uc_replication", config, spark, logging_spark, logger, run_id
+    )
+    summary = uc_replication_factory.run_uc_replication_operations()
+
+    if summary.failed_operations > 0:
+        logger.error(
+            f"UC replication completed with {summary.failed_operations} failures"
+        )
+        return 1
+
+    logger.info("All UC replication operations completed successfully")
+    return 0
+
+
 def main():
     """Main entry point for data replication system."""
     parser = argparse.ArgumentParser(
@@ -220,7 +272,7 @@ def main():
     parser.add_argument(
         "--operation",
         "-o",
-        choices=["all", "backup", "replication", "reconciliation"],
+        choices=["all", "backup", "replication", "reconciliation", "uc_replication"],
         default="all",
         help="Specific operation to run (default: all enabled operations)",
     )
@@ -360,7 +412,7 @@ def main():
                     f"Running backup operations for {len(backup_catalogs)} catalogs"
                 )
 
-                run_backup_only(config, logger, logging_spark, run_id, w)
+                run_backup(config, logger, logging_spark, run_id, w)
                 logger.info(f"Backup Ends {'-' * 60}")
             elif args.operation == "backup":
                 logger.info("Backup disabled or No catalogs configured for backup")
@@ -379,7 +431,7 @@ def main():
                     f"Running replication operations for {len(replication_catalogs)} catalogs"
                 )
 
-                run_replication_only(config, logger, logging_spark, run_id, w)
+                run_replication(config, logger, logging_spark, run_id, w)
                 logger.info(f"Replication Ends {'-' * 60}")
             elif args.operation == "replication":
                 logger.info(
@@ -400,12 +452,33 @@ def main():
                     f"Running reconciliation operations for {len(reconciliation_catalogs)} catalogs"
                 )
 
-                run_reconciliation_only(config, logger, logging_spark, run_id, w)
+                run_reconciliation(config, logger, logging_spark, run_id, w)
                 logger.info(f"Reconciliation Ends {'-' * 60}")
             elif args.operation == "reconciliation":
                 logger.info(
                     "Reconciliation disabled or No catalogs configured for reconciliation"
                 )
+
+        # if args.operation in ["all", "uc_replication"]:
+        #     # Check if UC replication is configured
+        #     uc_replication_catalogs = [
+        #         cat
+        #         for cat in config.target_catalogs
+        #         if cat.uc_replication_config and cat.uc_replication_config.enabled
+        #     ]
+
+        #     if uc_replication_catalogs:
+        #         logger.info(f"UC Replication Begins {'-' * 60}")
+        #         logger.info(
+        #             f"Running UC replication operations for {len(uc_replication_catalogs)} catalogs"
+        #         )
+
+        #         run_uc_replication(config, logger, logging_spark, run_id, w)
+        #         logger.info(f"UC Replication Ends {'-' * 60}")
+        #     elif args.operation == "uc_replication":
+        #         logger.info(
+        #             "UC replication disabled or No catalogs configured for UC replication"
+        #         )
 
         logger.info(f"All Operations Ends {'-' * 60}")
 

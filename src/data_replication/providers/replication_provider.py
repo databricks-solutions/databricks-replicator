@@ -118,8 +118,8 @@ class ReplicationProvider(BaseProvider):
         replication_config = self.catalog_config.replication_config
         source_catalog = replication_config.source_catalog
         target_catalog = self.catalog_config.catalog_name
-        source_table = f"{source_catalog}.{schema_name}.{table_name}"
-        target_table = f"{target_catalog}.{schema_name}.{table_name}"
+        source_table = f"`{source_catalog}`.`{schema_name}`.`{table_name}`"
+        target_table = f"`{target_catalog}`.`{schema_name}`.`{table_name}`"
 
         step1_query = None
         step2_query = None
@@ -586,11 +586,6 @@ class ReplicationProvider(BaseProvider):
                 None,
             )
 
-        # # Step 2: Use insert overwrite to replicate from intermediate to target
-        # step2_query = self._build_insert_overwrite_query(
-        #     intermediate_table, target_table
-        # )
-
         # Use deep clone
         step2_query = self._build_deep_clone_query(
             source_table, target_table, pipeline_id
@@ -610,9 +605,6 @@ class ReplicationProvider(BaseProvider):
         replication_operation,
     ) -> tuple:
         """Replicate table directly to target."""
-
-        # # Use insert overwrite for streaming tables/materialized views
-        # step1_query = self._build_insert_overwrite_query(source_table, target_table)
 
         # Use deep clone
         step1_query = self._build_deep_clone_query(

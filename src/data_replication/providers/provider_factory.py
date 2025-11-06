@@ -18,7 +18,7 @@ from ..config.models import (
     ReplicationSystemConfig,
     RunResult,
     RunSummary,
-    TargetCatalogConfig
+    TargetCatalogConfig,
 )
 from ..databricks_operations import DatabricksOperations
 
@@ -35,7 +35,7 @@ class ProviderFactory:
     """
 
     # Valid operation types
-    VALID_OPERATIONS = {"backup", "replication", "reconciliation"}
+    VALID_OPERATIONS = {"backup", "replication", "reconciliation", "uc_replication"}
 
     def __init__(
         self,
@@ -108,12 +108,13 @@ class ProviderFactory:
             return bool(
                 catalog.reconciliation_config and catalog.reconciliation_config.enabled
             )
+        elif self._operation_type == "uc_replication":
+            return bool(
+                catalog.uc_replication_config and catalog.uc_replication_config.enabled
+            )
         return False
 
-    def create_provider(
-        self,
-        catalog: TargetCatalogConfig
-    ) -> "BaseProvider":
+    def create_provider(self, catalog: TargetCatalogConfig) -> "BaseProvider":
         """Create a provider instance for the given catalog."""
         # Lazy import to avoid circular imports
         from .base_provider import BaseProvider
@@ -131,6 +132,10 @@ class ProviderFactory:
             from .reconciliation_provider import ReconciliationProvider
 
             provider_class = ReconciliationProvider
+        elif self._operation_type == "uc_replication":
+            from .uc_replication_provider import UCReplicationProvider
+
+            provider_class = UCReplicationProvider
         else:
             raise ValueError(f"Unknown operation type: {self._operation_type}")
 
@@ -397,13 +402,6 @@ class ProviderFactory:
 
             return summary
 
-        finally:
-            try:
-                if self.spark:
-                    self.spark.stop()  # type: ignore
-            except AttributeError:
-                pass
-
     def _run_catalog_operations(
         self, catalogs: List[TargetCatalogConfig]
     ) -> List[RunResult]:
@@ -418,7 +416,7 @@ class ProviderFactory:
         """
         results = []
         operation_name = self.get_operation_name()
-        
+
         # Process catalogs sequentially, but use concurrency within each schema
         for catalog in catalogs:
             try:
@@ -475,6 +473,14 @@ class ProviderFactory:
             )
         return self.run_operations()
 
+    def run_uc_replication_operations(self) -> RunSummary:
+        """Run UC replication operations for all configured catalogs."""
+        if self._operation_type != "uc_replication":
+            raise ValueError(
+                "This factory is not configured for uc_replication operations"
+            )
+        return self.run_operations()
+
     # Factory methods for creating specific operation factories
     @classmethod
     def create_backup_factory(cls, *args, **kwargs) -> "ProviderFactory":
@@ -490,3 +496,8 @@ class ProviderFactory:
     def create_reconciliation_factory(cls, *args, **kwargs) -> "ProviderFactory":
         """Factory method to create a reconciliation provider factory."""
         return cls("reconciliation", *args, **kwargs)
+
+    @classmethod
+    def create_uc_replication_factory(cls, *args, **kwargs) -> "ProviderFactory":
+        """Factory method to create a UC replication provider factory."""
+        return cls("uc_replication", *args, **kwargs)

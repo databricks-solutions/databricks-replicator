@@ -135,7 +135,6 @@ class BaseProvider(ABC):
             catalog_name, schema_name, object_name, object_type, error_msg, start_time
         )
 
-    @abstractmethod
     def process_table(self, schema_name: str, table_name: str) -> RunResult:
         """
         Process a single table.
@@ -258,11 +257,14 @@ class BaseProvider(ABC):
         return results
 
     def process_schema_concurrently(
-        self, schema_name: str, table_list: List[TableConfig], volume_list: List[VolumeConfig]
+        self,
+        schema_name: str,
+        table_list: List[TableConfig],
+        volume_list: List[VolumeConfig],
     ) -> List[RunResult]:
         """
         Process all tables first, then volumes in a schema using ThreadPoolExecutor.
-        
+
         Tables are processed concurrently first, and once all tables are complete,
         volumes are processed concurrently.
 
@@ -279,37 +281,43 @@ class BaseProvider(ABC):
         start_time = datetime.now(timezone.utc)
 
         try:
+            total_objects = 0
+            tables = []
+            volumes = []
             # Get all tables and volumes in the schema
-            tables = self._get_tables(schema_name, table_list)
-            volumes = self._get_volumes(schema_name, volume_list)
+            if self.catalog_config.table_types:
+                tables = self._get_tables(schema_name, table_list)
+                if len(tables) == 0:
+                    self.logger.info(
+                        f"No tables found in schema {self.catalog_name}.{schema_name}"
+                    )
+            if self.catalog_config.volume_types:
+                volumes = self._get_volumes(schema_name, volume_list)
+                if len(volumes) == 0:
+                    self.logger.info(
+                        f"No volumes found in schema {self.catalog_name}.{schema_name}"
+                    )
 
             total_objects = len(tables) + len(volumes)
             if total_objects == 0:
                 self.logger.info(
-                    f"No tables or volumes found in schema {self.catalog_name}.{schema_name}"
+                    f"No objects found in schema {self.catalog_name}.{schema_name}"
                 )
                 return results
 
-            self.logger.info(
-                f"Starting {self.get_operation_name()} of {len(tables)} tables and {len(volumes)} volumes "
-                f"in schema {self.catalog_name}.{schema_name} using {self.max_workers} workers"
-            )
-
-            if tables:
-                self.logger.info(f"Tables: {tables}")
-            if volumes:
-                self.logger.info(f"Volumes: {volumes}")
-
-            # Phase 1: Process all tables first
+            # Process all tables first
             if tables:
                 self.logger.info(
-                    f"Phase 1: Processing {len(tables)} tables in schema {self.catalog_name}.{schema_name}"
+                    f"starting {self.get_operation_name()} of {len(tables)} tables in schema {self.catalog_name}.{schema_name} using {self.max_workers} workers"
                 )
-                
+                self.logger.info(f"Tables: {tables}")
+
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                     # Submit table processing jobs
                     future_to_table = {
-                        executor.submit(self.process_table, schema_name, table_name): table_name
+                        executor.submit(
+                            self.process_table, schema_name, table_name
+                        ): table_name
                         for table_name in tables
                     }
 
@@ -344,18 +352,23 @@ class BaseProvider(ABC):
                             )
                             results.append(result)
 
-                self.logger.info(f"Phase 1 complete: All tables processed in schema {self.catalog_name}.{schema_name}")
+                self.logger.info(
+                    f"All tables processed in schema {self.catalog_name}.{schema_name}"
+                )
 
-            # Phase 2: Process all volumes after tables are complete
+            # Process all volumes after tables are complete
             if volumes:
                 self.logger.info(
-                    f"Phase 2: Processing {len(volumes)} volumes in schema {self.catalog_name}.{schema_name}"
+                    f"starting {self.get_operation_name()} of {len(volumes)} volumes in schema {self.catalog_name}.{schema_name} using {self.max_workers} workers"
                 )
-                
+                self.logger.info(f"Volumes: {volumes}")
+
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                     # Submit volume processing jobs
                     future_to_volume = {
-                        executor.submit(self.process_volume, schema_name, volume_name): volume_name
+                        executor.submit(
+                            self.process_volume, schema_name, volume_name
+                        ): volume_name
                         for volume_name in volumes
                     }
 
@@ -390,7 +403,9 @@ class BaseProvider(ABC):
                             )
                             results.append(result)
 
-                self.logger.info(f"Phase 2 complete: All volumes processed in schema {self.catalog_name}.{schema_name}")
+                self.logger.info(
+                    f"All volumes processed in schema {self.catalog_name}.{schema_name}"
+                )
 
         except Exception as e:
             result = self._handle_exception(
@@ -461,8 +476,12 @@ class BaseProvider(ABC):
                     schema.volumes or [],
                 )
                 for schema in self.catalog_config.target_schemas
-                if self.db_ops.refresh_schema_metadata(f"{self.catalog_name}.{schema.schema_name}")
-                and self.spark.catalog.databaseExists(f"{self.catalog_name}.{schema.schema_name}")
+                if self.db_ops.refresh_schema_metadata(
+                    f"{self.catalog_name}.{schema.schema_name}"
+                )
+                and self.spark.catalog.databaseExists(
+                    f"{self.catalog_name}.{schema.schema_name}"
+                )
             ]
 
         if self.catalog_config.schema_filter_expression:
@@ -518,7 +537,9 @@ class BaseProvider(ABC):
             self.catalog_config.table_types,
         )
 
-    def _get_volumes(self, schema_name: str, volume_list: List[VolumeConfig]) -> List[str]:
+    def _get_volumes(
+        self, schema_name: str, volume_list: List[VolumeConfig]
+    ) -> List[str]:
         """
         Get list of volumes to process in a schema based on configuration.
 
@@ -540,7 +561,8 @@ class BaseProvider(ABC):
                 if schema_config.schema_name == schema_name:
                     if schema_config.exclude_volumes:
                         exclude_names = {
-                            volume.volume_name for volume in schema_config.exclude_volumes
+                            volume.volume_name
+                            for volume in schema_config.exclude_volumes
                         }
                     break
 

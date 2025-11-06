@@ -60,7 +60,7 @@ class AuditLogger:
 
         # Get current execution user using Spark SQL
         try:
-            self.execution_user = spark.sql("SELECT current_user() as user").collect()[
+            self.execution_user = self.spark.sql("SELECT current_user() as user").collect()[
                 0
             ]["user"]
         except Exception:
