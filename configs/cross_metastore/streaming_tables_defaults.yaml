@@ -7,8 +7,6 @@ version: "1.0"
 
 replication_group: "streaming_tables_defaults"
 
-execute_at: "target"
-
 source_databricks_connect_config:
   name: "azure"
   sharing_identifier: "azure:eastus2:b86c6879-8c55-4e70-a585-18d16a4fa6e9"

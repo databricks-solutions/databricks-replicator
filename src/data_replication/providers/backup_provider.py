@@ -100,7 +100,7 @@ class BackupProvider(BaseProvider):
         return backup_config.source_catalog
 
     def process_schema_concurrently(
-        self, schema_name: str, table_list: List
+        self, schema_name: str, table_list: List, volume_list: List = None
     ) -> List[RunResult]:
         """Override to add backup-specific schema setup."""
         backup_config = self.catalog_config.backup_config
@@ -122,7 +122,7 @@ class BackupProvider(BaseProvider):
             )
             return results
 
-        table_results = super().process_schema_concurrently(schema_name, table_list)
+        table_results = super().process_schema_concurrently(schema_name, table_list, volume_list)
         results.extend(table_results)
         return results
 

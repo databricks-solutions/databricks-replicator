@@ -10,16 +10,16 @@ import os
 import sys
 
 # Determine the parent directory of the current script for module imports
-pwd = ""
+PWD = ""
 try:
-    pwd = (
+    PWD = (
         dbutils.notebook.entry_point.getDbutils()
         .notebook()
         .getContext()
         .notebookPath()
         .get()
     )  # type: ignore  # noqa: E501
-    parent_folder = os.path.dirname(os.path.dirname(pwd))
+    parent_folder = os.path.dirname(os.path.dirname(PWD))
 except NameError:
     # Fallback when running outside Databricks (e.g. local development or tests)
     parent_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -40,7 +40,11 @@ from data_replication.audit.logger import DataReplicationLogger
 from data_replication.config.loader import ConfigLoader
 from data_replication.exceptions import ConfigurationError
 from data_replication.providers.provider_factory import ProviderFactory
-from data_replication.utils import create_spark_session
+from data_replication.utils import (
+    create_spark_session,
+    validate_spark_session,
+    get_workspace_url_from_host,
+)
 
 
 def create_logger(config) -> DataReplicationLogger:
@@ -99,66 +103,31 @@ def validate_args(args) -> None:
             )
 
 
-def validate_execution_environment(config, operation, logger) -> int:
-    """Validate configuration requirements based on execution environment and operation."""
-    if config.execute_at == "source" and operation not in ["backup"]:
-        logger.error("When execute_at is 'source', only 'backup' operation is allowed")
-        return 1
-
-    if config.execute_at == "target" and operation in [
-        "backup",
-        "all",
-    ]:
-        if (
-            not config.source_databricks_connect_config.host
-            or not config.source_databricks_connect_config.token
-        ):
-            logger.error(
-                "Source Databricks Connect configuration must be provided for backup operations when execute_at is 'target'"
-            )
-            return 1
-
-    if config.execute_at == "external":
-        if operation in ["backup", "all"]:
-            if (
-                not config.source_databricks_connect_config.host
-                or not config.source_databricks_connect_config.token
-            ):
-                logger.error(
-                    "Source Databricks Connect configuration must be provided for backup operations when execute_at is 'external'"
-                )
-                return 1
-        if operation in ["replication", "reconciliation", "all"]:
-            if (
-                not config.target_databricks_connect_config.host
-                or not config.target_databricks_connect_config.token
-            ):
-                logger.error(
-                    "Target Databricks Connect configuration must be provided for replication and reconciliation operations when execute_at is 'external'"
-                )
-                return 1
-
-    return 0
-
-
 def run_backup_only(
-    config,
-    logger,
-    run_id: str,
-    source_host: str,
-    source_token: str,
-    source_cluster_id: str,
-    logging_host: str,
-    logging_token: str,
-    logging_cluster_id: str,
+    config, logger, logging_spark, run_id: str, w: WorkspaceClient
 ) -> int:
     """Run only backup operations."""
+    source_host = config.source_databricks_connect_config.host
+    source_token = None
+    source_cluster_id = config.source_databricks_connect_config.cluster_id
+    if config.source_databricks_connect_config.token:
+        source_token = w.dbutils.secrets.get(
+            config.source_databricks_connect_config.token.secret_scope,
+            config.source_databricks_connect_config.token.secret_key,
+        )
+    # create and validate Spark sessions
     spark = create_spark_session(source_host, source_token, source_cluster_id)
-    logging_spark = create_spark_session(logging_host, logging_token, logging_cluster_id)
+    if not validate_spark_session(spark, get_workspace_url_from_host(source_host)):
+        logger.error(
+            "Spark session is not connected to the configured source workspace"
+        )
+        raise ConfigurationError(
+            "Spark session is not connected to the configured source workspace"
+        )
+
     backup_factory = ProviderFactory(
         "backup", config, spark, logging_spark, logger, run_id
     )
-    # logger.info(f"Backup operations in {config.execute_at.value} environment")
     summary = backup_factory.run_backup_operations()
 
     if summary.failed_operations > 0:
@@ -170,15 +139,29 @@ def run_backup_only(
 
 
 def run_replication_only(
-    config, logger, run_id: str, target_host: str, target_token: str, target_cluster_id: str
+    config, logger, logging_spark, run_id: str, w: WorkspaceClient
 ) -> int:
     """Run only replication operations."""
+    target_host = config.target_databricks_connect_config.host
+    target_token = None
+    target_cluster_id = config.target_databricks_connect_config.cluster_id
+    if config.target_databricks_connect_config.token:
+        target_token = w.dbutils.secrets.get(
+            config.target_databricks_connect_config.token.secret_scope,
+            config.target_databricks_connect_config.token.secret_key,
+        )
     spark = create_spark_session(target_host, target_token, target_cluster_id)
+    if not validate_spark_session(spark, get_workspace_url_from_host(target_host)):
+        logger.error(
+            "Spark session is not connected to the configured target workspace"
+        )
+        raise ConfigurationError(
+            "Spark session is not connected to the configured target workspace"
+        )
 
     replication_factory = ProviderFactory(
-        "replication", config, spark, spark, logger, run_id
+        "replication", config, spark, logging_spark, logger, run_id
     )
-    logger.info(f"Replication operations in {config.execute_at.value} environment")
     summary = replication_factory.run_replication_operations()
 
     if summary.failed_operations > 0:
@@ -190,15 +173,29 @@ def run_replication_only(
 
 
 def run_reconciliation_only(
-    config, logger, run_id: str, target_host: str, target_token: str, target_cluster_id: str
+    config, logger, logging_spark, run_id: str, w: WorkspaceClient
 ) -> int:
     """Run only reconciliation operations."""
+    target_host = config.target_databricks_connect_config.host
+    target_token = None
+    target_cluster_id = config.target_databricks_connect_config.cluster_id
+    if config.target_databricks_connect_config.token:
+        target_token = w.dbutils.secrets.get(
+            config.target_databricks_connect_config.token.secret_scope,
+            config.target_databricks_connect_config.token.secret_key,
+        )
     spark = create_spark_session(target_host, target_token, target_cluster_id)
+    if not validate_spark_session(spark, get_workspace_url_from_host(target_host)):
+        logger.error(
+            "Spark session is not connected to the configured target workspace"
+        )
+        raise ConfigurationError(
+            "Spark session is not connected to the configured target workspace"
+        )
 
     reconciliation_factory = ProviderFactory(
-        "reconciliation", config, spark, spark, logger, run_id
+        "reconciliation", config, spark, logging_spark, logger, run_id
     )
-    logger.info(f"Reconciliation operations in {config.execute_at.value} environment")
     summary = reconciliation_factory.run_reconciliation_operations()
 
     if summary.failed_operations > 0:
@@ -296,54 +293,56 @@ def main():
             logger.info("Configuration validation completed successfully")
             return 0
 
-        validation_result = validate_execution_environment(
-            config, args.operation, logger
-        )
-        if validation_result != 0:
-            return validation_result
-
         run_id = str(uuid.uuid4())
         if args.run_id:
             run_id = args.run_id
 
         w = WorkspaceClient()
-        # Note: In production, tokens should be retrieved from Databricks secrets
-        source_host = None
-        source_token = None
-        source_cluster_id = config.source_databricks_connect_config.cluster_id
-        target_host = None
-        target_token = None
-        target_cluster_id = config.target_databricks_connect_config.cluster_id
 
-        if (
-            config.source_databricks_connect_config.host
-            and config.source_databricks_connect_config.token
-        ):
-            source_host = config.source_databricks_connect_config.host
-            source_token = w.dbutils.secrets.get(
-                config.source_databricks_connect_config.token.secret_scope,
-                config.source_databricks_connect_config.token.secret_key,
+        if config.audit_config.logging_workspace == "source":
+            logging_host = config.source_databricks_connect_config.host
+            logging_token = (
+                w.dbutils.secrets.get(
+                    config.source_databricks_connect_config.token.secret_scope,
+                    config.source_databricks_connect_config.token.secret_key,
+                )
+                if config.source_databricks_connect_config.token
+                else None
             )
-        if (
-            config.target_databricks_connect_config.host
-            and config.target_databricks_connect_config.token
-        ):
-            target_host = config.target_databricks_connect_config.host
-            target_token = w.dbutils.secrets.get(
-                config.target_databricks_connect_config.token.secret_scope,
-                config.target_databricks_connect_config.token.secret_key,
+            logging_cluster_id = config.source_databricks_connect_config.cluster_id
+        else:
+            logging_host = config.target_databricks_connect_config.host
+            logging_token = (
+                w.dbutils.secrets.get(
+                    config.target_databricks_connect_config.token.secret_scope,
+                    config.target_databricks_connect_config.token.secret_key,
+                )
+                if config.target_databricks_connect_config.token
+                else None
             )
+            logging_cluster_id = config.target_databricks_connect_config.cluster_id
+
+        logging_spark = create_spark_session(
+            logging_host, logging_token, logging_cluster_id
+        )
+        logging_workspace_url = get_workspace_url_from_host(logging_host)
+        if not validate_spark_session(logging_spark, logging_workspace_url):
+            logger.error(
+                "Logging Spark session is not connected to the configured logging workspace"
+            )
+            raise ConfigurationError(
+                "Logging Spark session is not connected to the configured logging workspace"
+            )
+
         logger.debug(f"Config: {config}")
         logger.info(
-            f"Source Host: {source_host if source_host else 'Not Configured'}"
+            f"Source Metastore: {config.source_databricks_connect_config.sharing_identifier}"
         )
         logger.info(
-            f"Target Host: {target_host if target_host else 'Not Configured'}"
+            f"Target Metastore: {config.target_databricks_connect_config.sharing_identifier}"
         )
-        logger.info(f"Source Metastore: {config.source_databricks_connect_config.sharing_identifier}")
-        logger.info(f"Target Metastore: {config.target_databricks_connect_config.sharing_identifier}")
         logger.info(
-            f"Log run_id {run_id} in {config.audit_config.audit_table if config.audit_config and config.audit_config.audit_table else 'No audit table configured'}"
+            f"Log run_id {run_id} in {config.audit_config.audit_table} at {logging_workspace_url}"
         )
         logger.info(f"All Operations Begins {'-' * 60}")
 
@@ -361,33 +360,10 @@ def main():
                     f"Running backup operations for {len(backup_catalogs)} catalogs"
                 )
 
-                logging_host = target_host
-                logging_token = target_token
-                logging_cluster_id = target_cluster_id
-                if config.execute_at == "source":
-                    logging_host = source_host
-                    logging_token = source_token
-                    logging_cluster_id = source_cluster_id
-
-                logger.info(f"Logging backup operations to {logging_host}")
-
-                run_backup_only(
-                    config,
-                    logger,
-                    run_id,
-                    source_host,
-                    source_token,
-                    source_cluster_id,
-                    logging_host,
-                    logging_token,
-                    logging_cluster_id,
-                )
+                run_backup_only(config, logger, logging_spark, run_id, w)
                 logger.info(f"Backup Ends {'-' * 60}")
             elif args.operation == "backup":
                 logger.info("Backup disabled or No catalogs configured for backup")
-
-        # if args.operation in ["all", "delta_share"]:
-        #     logger.info("Delta share operations not yet implemented")
 
         if args.operation in ["all", "replication"]:
             # Check if replication is configured
@@ -403,7 +379,7 @@ def main():
                     f"Running replication operations for {len(replication_catalogs)} catalogs"
                 )
 
-                run_replication_only(config, logger, run_id, target_host, target_token, target_cluster_id)
+                run_replication_only(config, logger, logging_spark, run_id, w)
                 logger.info(f"Replication Ends {'-' * 60}")
             elif args.operation == "replication":
                 logger.info(
@@ -424,9 +400,7 @@ def main():
                     f"Running reconciliation operations for {len(reconciliation_catalogs)} catalogs"
                 )
 
-                run_reconciliation_only(
-                    config, logger, run_id, target_host, target_token, target_cluster_id
-                )
+                run_reconciliation_only(config, logger, logging_spark, run_id, w)
                 logger.info(f"Reconciliation Ends {'-' * 60}")
             elif args.operation == "reconciliation":
                 logger.info(

@@ -5,8 +5,6 @@ version: "1.0"
 
 replication_group: "recon_all_tables_custom"
 
-execute_at: "target"
-
 source_databricks_connect_config:
   name: "azure"
   host: "https://adb-984752964297111.11.azuredatabricks.net"

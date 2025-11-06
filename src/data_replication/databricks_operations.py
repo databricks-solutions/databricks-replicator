@@ -10,7 +10,7 @@ from typing import List, Tuple
 from databricks.connect import DatabricksSession
 from pyspark.sql.functions import col
 
-from data_replication.config.models import RetryConfig, TableType
+from data_replication.config.models import RetryConfig, TableType, VolumeType
 from data_replication.exceptions import TableNotFoundError
 from data_replication.utils import retry_with_logging
 
@@ -599,3 +599,93 @@ class DatabricksOperations:
 
         except Exception as e:
             raise Exception(f"""Failed to get provider name: {str(e)}""") from e
+
+    def get_volumes_in_schema(self, catalog_name: str, schema_name: str) -> List[str]:
+        """
+        Get all volumes in a schema.
+
+        Args:
+            catalog_name: Name of the catalog
+            schema_name: Name of the schema
+
+        Returns:
+            List of volume names
+        """
+        try:
+            full_schema = f"{catalog_name}.{schema_name}"
+
+            # Get visible volumes using SHOW VOLUMES
+            show_volumes_df = self.spark.sql(f"SHOW VOLUMES IN {full_schema}")
+            return [row.volume_name for row in show_volumes_df.collect()]
+
+        except Exception:
+            # Schema might not exist or be accessible
+            return []
+
+    def filter_volumes_by_type(
+        self,
+        catalog_name: str,
+        schema_name: str,
+        volume_names: List[str],
+        volume_types: List[VolumeType],
+    ) -> List[str]:
+        """
+        Filter a list of volume names to only include selected types.
+
+        Args:
+            catalog_name: Name of the catalog
+            schema_name: Name of the schema
+            volume_names: List of volume names to filter
+            volume_types: List of volume types to filter by
+
+        Returns:
+            List of volume names that are of the selected types
+        """
+        return [
+            volume
+            for volume in volume_names
+            if self.get_volume_type(f"{catalog_name}.{schema_name}.{volume}").lower()
+            in [vol_type.lower() for vol_type in volume_types]
+        ]
+
+    def get_volume_type(self, volume_name: str) -> str:
+        """
+        Get the type of a volume.
+
+        Args:
+            volume_name: Full volume name (catalog.schema.volume)
+
+        Returns:
+            Volume type as string
+        """
+        try:
+            # Use DESCRIBE VOLUME to get volume information
+            describe_df = self.spark.sql(f"DESCRIBE VOLUME {volume_name}")
+            
+            # Look for the volume type in the describe output
+            volume_type = describe_df.select('volume_type').collect()[0][0]
+            if volume_type:
+                return volume_type.upper()
+            return None
+            
+        except Exception as e:
+            print(f"Warning: Could not determine volume type for {volume_name}: {e}")
+            return None
+
+    @retry_with_logging(retry_config=RetryConfig(retries=5, delay=3))
+    def refresh_volume_metadata(self, volume_name: str) -> bool:
+        """
+        Check if a volume exists.
+
+        Args:
+            volume_name: Full volume name (catalog.schema.volume)
+
+        Returns:
+            True if volume exists, False otherwise
+        """
+        try:
+            # Check if volume exists by attempting to describe it
+            self.spark.sql(f"DESCRIBE VOLUME {volume_name}")
+            return True
+        except Exception:
+            return False

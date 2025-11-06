@@ -20,6 +20,7 @@ from ..config.models import (
     RetryConfig,
     RunResult,
     TableConfig,
+    VolumeConfig,
     TargetCatalogConfig,
     DatabricksConnectConfig,
 )
@@ -148,6 +149,32 @@ class BaseProvider(ABC):
             RunResult object for the operation
         """
 
+    def process_volume(self, schema_name: str, volume_name: str) -> RunResult:
+        """
+        Process a single volume.
+        Default implementation returns a success result.
+        Override in subclasses that need volume processing.
+
+        Args:
+            schema_name: Schema name
+            volume_name: Volume name
+
+        Returns:
+            RunResult object for the operation
+        """
+        # Default implementation - volumes not supported by this provider
+        start_time = datetime.now(timezone.utc)
+        return RunResult(
+            operation_type=self.get_operation_name(),
+            catalog_name=self.catalog_config.catalog_name,
+            schema_name=schema_name,
+            object_name=volume_name,
+            object_type="volume",
+            status="success",
+            start_time=start_time.isoformat(),
+            end_time=datetime.now(timezone.utc).isoformat(),
+        )
+
     @abstractmethod
     def get_operation_name(self) -> str:
         """
@@ -203,7 +230,7 @@ class BaseProvider(ABC):
                 f"Starting {self.get_operation_name()} schemas: {schema_list}"
             )
 
-            for schema_name, table_list in schema_list:
+            for schema_name, table_list, volume_list in schema_list:
                 self.logger.info(
                     f"Starting {self.get_operation_name()} schema: {schema_name}",
                     extra={
@@ -212,7 +239,7 @@ class BaseProvider(ABC):
                     },
                 )
                 schema_results = self.process_schema_concurrently(
-                    schema_name, table_list
+                    schema_name, table_list, volume_list
                 )
                 results.extend(schema_results)
 
@@ -231,79 +258,139 @@ class BaseProvider(ABC):
         return results
 
     def process_schema_concurrently(
-        self, schema_name: str, table_list: List[TableConfig]
+        self, schema_name: str, table_list: List[TableConfig], volume_list: List[VolumeConfig]
     ) -> List[RunResult]:
         """
-        Process all tables in a schema concurrently using ThreadPoolExecutor.
+        Process all tables first, then volumes in a schema using ThreadPoolExecutor.
+        
+        Tables are processed concurrently first, and once all tables are complete,
+        volumes are processed concurrently.
 
         Args:
             schema_name: Schema name to process
             table_list: List of table configurations to process
+            volume_list: List of volume configurations to process
 
         Returns:
-            List of RunResult objects for each table operation
+            List of RunResult objects for each table and volume operation
         """
         results: List[RunResult] = []
         catalog_name = self.catalog_config.catalog_name
         start_time = datetime.now(timezone.utc)
 
         try:
-            # Get all tables in the schema
+            # Get all tables and volumes in the schema
             tables = self._get_tables(schema_name, table_list)
+            volumes = self._get_volumes(schema_name, volume_list)
 
-            if not tables:
+            total_objects = len(tables) + len(volumes)
+            if total_objects == 0:
                 self.logger.info(
-                    f"No tables found in schema {self.catalog_name}.{schema_name}"
+                    f"No tables or volumes found in schema {self.catalog_name}.{schema_name}"
                 )
                 return results
 
             self.logger.info(
-                f"Starting concurrent {self.get_operation_name()} of {len(tables)} tables "
+                f"Starting {self.get_operation_name()} of {len(tables)} tables and {len(volumes)} volumes "
                 f"in schema {self.catalog_name}.{schema_name} using {self.max_workers} workers"
             )
 
-            self.logger.info(f"Tables {tables}")
+            if tables:
+                self.logger.info(f"Tables: {tables}")
+            if volumes:
+                self.logger.info(f"Volumes: {volumes}")
 
-            # Process tables concurrently within the schema
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                # Submit jobs for all tables in the schema
-                future_to_table = {
-                    executor.submit(
-                        self.process_table, schema_name, table_name
-                    ): table_name
-                    for table_name in tables
-                }
+            # Phase 1: Process all tables first
+            if tables:
+                self.logger.info(
+                    f"Phase 1: Processing {len(tables)} tables in schema {self.catalog_name}.{schema_name}"
+                )
+                
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    # Submit table processing jobs
+                    future_to_table = {
+                        executor.submit(self.process_table, schema_name, table_name): table_name
+                        for table_name in tables
+                    }
 
-                # Collect results
-                for future in as_completed(future_to_table):
-                    table_name = future_to_table[future]
-                    try:
-                        result = future.result(timeout=self.timeout_seconds)
-                        results.append(result)
+                    # Collect table results
+                    for future in as_completed(future_to_table):
+                        table_name = future_to_table[future]
+                        try:
+                            result = future.result(timeout=self.timeout_seconds)
+                            results.append(result)
 
-                        if result.status == "success":
-                            self.logger.info(
-                                f"Successfully processed table "
-                                f"{catalog_name}.{schema_name}.{table_name}"
+                            if result.status == "success":
+                                self.logger.info(
+                                    f"Successfully processed table "
+                                    f"{catalog_name}.{schema_name}.{table_name}"
+                                )
+                            else:
+                                self.logger.error(
+                                    f"Failed to process table "
+                                    f"{catalog_name}.{schema_name}.{table_name}: "
+                                    f"{result.error_message}"
+                                )
+
+                        except Exception as e:
+                            result = self._handle_exception(
+                                e,
+                                "processing table",
+                                catalog_name,
+                                schema_name,
+                                table_name,
+                                "table",
+                                start_time,
                             )
-                        else:
-                            self.logger.error(
-                                f"Failed to process table "
-                                f"{catalog_name}.{schema_name}.{table_name}: "
-                                f"{result.error_message}"
-                            )
+                            results.append(result)
 
-                    except Exception as e:
-                        result = self._handle_exception(
-                            e,
-                            "processing table",
-                            catalog_name,
-                            schema_name,
-                            table_name,
-                            "table",
-                            start_time,
-                        )
-                        results.append(result)
+                self.logger.info(f"Phase 1 complete: All tables processed in schema {self.catalog_name}.{schema_name}")
+
+            # Phase 2: Process all volumes after tables are complete
+            if volumes:
+                self.logger.info(
+                    f"Phase 2: Processing {len(volumes)} volumes in schema {self.catalog_name}.{schema_name}"
+                )
+                
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    # Submit volume processing jobs
+                    future_to_volume = {
+                        executor.submit(self.process_volume, schema_name, volume_name): volume_name
+                        for volume_name in volumes
+                    }
+
+                    # Collect volume results
+                    for future in as_completed(future_to_volume):
+                        volume_name = future_to_volume[future]
+                        try:
+                            result = future.result(timeout=self.timeout_seconds)
+                            results.append(result)
+
+                            if result.status == "success":
+                                self.logger.info(
+                                    f"Successfully processed volume "
+                                    f"{catalog_name}.{schema_name}.{volume_name}"
+                                )
+                            else:
+                                self.logger.error(
+                                    f"Failed to process volume "
+                                    f"{catalog_name}.{schema_name}.{volume_name}: "
+                                    f"{result.error_message}"
+                                )
+
+                        except Exception as e:
+                            result = self._handle_exception(
+                                e,
+                                "processing volume",
+                                catalog_name,
+                                schema_name,
+                                volume_name,
+                                "volume",
+                                start_time,
+                            )
+                            results.append(result)
+
+                self.logger.info(f"Phase 2 complete: All volumes processed in schema {self.catalog_name}.{schema_name}")
 
         except Exception as e:
             result = self._handle_exception(
@@ -357,15 +444,12 @@ class BaseProvider(ABC):
             error_message=error_msg,
         )
 
-    def _get_schemas(self) -> List[Tuple[str, List[TableConfig]]]:
+    def _get_schemas(self) -> List[Tuple[str, List[TableConfig], List[VolumeConfig]]]:
         """
         Get list of schemas to process based on configuration.
 
-        Args:
-            catalog_name: Optional catalog name to override config catalog
-
         Returns:
-            List of tuples containing schema names and table lists to process
+            List of tuples containing schema names, table lists, and volume lists to process
         """
 
         if self.catalog_config.target_schemas:
@@ -374,6 +458,7 @@ class BaseProvider(ABC):
                 (
                     schema.schema_name,
                     schema.tables or [],
+                    schema.volumes or [],
                 )
                 for schema in self.catalog_config.target_schemas
                 if self.db_ops.refresh_schema_metadata(f"{self.catalog_name}.{schema.schema_name}")
@@ -390,7 +475,7 @@ class BaseProvider(ABC):
             # Process all schemas
             schema_list = self.db_ops.get_all_schemas(self.catalog_name)
 
-        return [(item, []) for item in schema_list]
+        return [(item, [], []) for item in schema_list]
 
     def _get_tables(self, schema_name: str, table_list: List[TableConfig]) -> List[str]:
         """
@@ -431,4 +516,48 @@ class BaseProvider(ABC):
             schema_name,
             tables,
             self.catalog_config.table_types,
+        )
+
+    def _get_volumes(self, schema_name: str, volume_list: List[VolumeConfig]) -> List[str]:
+        """
+        Get list of volumes to process in a schema based on configuration.
+
+        Args:
+            schema_name: Name of the schema
+            volume_list: List of volume configurations to process in the schema
+
+        Returns:
+            List of volume names to process
+        """
+        # Return empty list if no volume types are configured
+        if not self.catalog_config.volume_types:
+            return []
+
+        # Find exclusions for this schema from configuration
+        exclude_names = set()
+        if self.catalog_config.target_schemas:
+            for schema_config in self.catalog_config.target_schemas:
+                if schema_config.schema_name == schema_name:
+                    if schema_config.exclude_volumes:
+                        exclude_names = {
+                            volume.volume_name for volume in schema_config.exclude_volumes
+                        }
+                    break
+
+        if volume_list:
+            # Use explicitly configured volumes
+            volumes = [item.volume_name for item in volume_list]
+        else:
+            # Process all volumes in the schema
+            volumes = self.db_ops.get_volumes_in_schema(self.catalog_name, schema_name)
+
+        # Apply exclusions first
+        volumes = [volume for volume in volumes if volume not in exclude_names]
+
+        # Then filter by volume types
+        return self.db_ops.filter_volumes_by_type(
+            self.catalog_name,
+            schema_name,
+            volumes,
+            self.catalog_config.volume_types,
         )

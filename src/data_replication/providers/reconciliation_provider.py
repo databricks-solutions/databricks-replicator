@@ -71,7 +71,7 @@ class ReconciliationProvider(BaseProvider):
         return reconciliation_config.source_catalog
 
     def process_schema_concurrently(
-        self, schema_name: str, table_list: List
+        self, schema_name: str, table_list: List, volume_list: List = None
     ) -> List[RunResult]:
         """Override to add reconciliation-specific schema setup."""
         reconciliation_config = self.catalog_config.reconciliation_config
@@ -82,7 +82,7 @@ class ReconciliationProvider(BaseProvider):
             reconciliation_config.recon_outputs_schema,
         )
 
-        return super().process_schema_concurrently(schema_name, table_list)
+        return super().process_schema_concurrently(schema_name, table_list, volume_list)
 
     def _reconcile_table(
         self,

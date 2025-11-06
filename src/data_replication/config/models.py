@@ -19,6 +19,13 @@ class TableType(str, Enum):
     EXTERNAL = "external"
 
 
+class VolumeType(str, Enum):
+    """Enumeration of supported volume types."""
+
+    MANAGED = "managed"
+    EXTERNAL = "external"
+
+
 class ExecuteAt(str, Enum):
     """Enumeration of execution locations for operations."""
 
@@ -38,6 +45,7 @@ class AuditConfig(BaseModel):
     """Configuration for audit tables"""
 
     audit_table: str
+    logging_workspace: ExecuteAt = ExecuteAt.TARGET
     create_audit_catalog: Optional[bool] = False
     audit_catalog_location: Optional[str] = None
 
@@ -63,7 +71,7 @@ class DatabricksConnectConfig(BaseModel):
 
     name: str
     sharing_identifier: str
-    host: Optional[str] = None
+    host: str
     token: Optional[SecretConfig] = None
     cluster_id: Optional[str] = None
 
@@ -80,12 +88,26 @@ class TableConfig(BaseModel):
         return v.lower() if v else v
 
 
+class VolumeConfig(BaseModel):
+    """Configuration for individual volumes."""
+
+    volume_name: str
+
+    @field_validator("volume_name")
+    @classmethod
+    def validate_volume_name(cls, v):
+        """Convert volume name to lowercase."""
+        return v.lower() if v else v
+
+
 class SchemaConfig(BaseModel):
     """Configuration for individual schemas."""
 
     schema_name: str
     tables: Optional[List[TableConfig]] = None
     exclude_tables: Optional[List[TableConfig]] = None
+    volumes: Optional[List[VolumeConfig]] = None
+    exclude_volumes: Optional[List[VolumeConfig]] = None
 
     @field_validator("schema_name")
     @classmethod
@@ -175,6 +197,7 @@ class TargetCatalogConfig(BaseModel):
 
     catalog_name: str
     table_types: Optional[List[TableType]] = None
+    volume_types: Optional[List[VolumeType]] = None
     target_schemas: Optional[List[SchemaConfig]] = None
     schema_filter_expression: Optional[str] = None
     backup_config: Optional[BackupConfig] = None
@@ -238,11 +261,11 @@ class ReplicationSystemConfig(BaseModel):
 
     version: str
     replication_group: str
-    execute_at: ExecuteAt = Field(default=ExecuteAt.TARGET)
     source_databricks_connect_config: DatabricksConnectConfig
     target_databricks_connect_config: DatabricksConnectConfig
     audit_config: AuditConfig
     table_types: Optional[List[TableType]] = None
+    volume_types: Optional[List[VolumeType]] = None
     backup_config: Optional[BackupConfig] = None
     replication_config: Optional[ReplicationConfig] = None
     reconciliation_config: Optional[ReconciliationConfig] = None
@@ -266,6 +289,14 @@ class ReplicationSystemConfig(BaseModel):
         for catalog in self.target_catalogs:
             if self.table_types is not None and catalog.table_types is None:
                 catalog.table_types = self.table_types
+        return self
+
+    @model_validator(mode="after")
+    def set_volume_types(self):
+        """Merge catalog-level volume types into system-level config"""
+        for catalog in self.target_catalogs:
+            if self.volume_types is not None and catalog.volume_types is None:
+                catalog.volume_types = self.volume_types
         return self
 
     @model_validator(mode="after")
@@ -405,6 +436,7 @@ class ReplicationSystemConfig(BaseModel):
                 elif isinstance(field_value, BaseModel):
                     # Recursively process nested BaseModel objects
                     replace_in_object(field_value, catalog_name)
+
         for catalog in self.target_catalogs:
             # Replace in all config objects
             replace_in_object(catalog.backup_config, catalog.catalog_name)
@@ -543,9 +575,11 @@ class ReplicationSystemConfig(BaseModel):
                         f"Reconciliation 'enabled' must be set in catalog: {catalog.catalog_name}"
                     )
 
-            if catalog.table_types is None or len(catalog.table_types) == 0:
+            if (catalog.table_types is None or len(catalog.table_types) == 0) and (
+                catalog.volume_types is None or len(catalog.volume_types) == 0
+            ):
                 raise ValueError(
-                    f"table_types must be provided in catalog: {catalog.catalog_name}"
+                    f"table_types or volume_types must be provided in catalog: {catalog.catalog_name}"
                 )
 
             # Ensure only one of schema_filter_expression or target_schemas is provided

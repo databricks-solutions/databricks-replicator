@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import List
 
 # from delta.tables import DeltaTable
-from ..config.models import RunResult
+from ..config.models import RunResult, TableConfig, VolumeConfig
 from ..exceptions import ReplicationError, TableNotFoundError
 from ..utils import retry_with_logging
 from .base_provider import BaseProvider
@@ -33,6 +33,10 @@ class ReplicationProvider(BaseProvider):
         """Process a single table for replication."""
         return self._replicate_table(schema_name, table_name)
 
+    def process_volume(self, schema_name: str, volume_name: str) -> RunResult:
+        """Process a single volume for replication."""
+        return self._replicate_volume(schema_name, volume_name)
+
     def setup_operation_catalogs(self) -> str:
         """Setup replication-specific catalogs."""
         replication_config = self.catalog_config.replication_config
@@ -45,7 +49,10 @@ class ReplicationProvider(BaseProvider):
                 replication_config.target_catalog_location,
             )
         # Create intermediate catalog if needed
-        if replication_config.create_intermediate_catalog and replication_config.intermediate_catalog:
+        if (
+            replication_config.create_intermediate_catalog
+            and replication_config.intermediate_catalog
+        ):
             self.logger.info(
                 f"""Creating intermediate catalog: {replication_config.intermediate_catalog} at location: {replication_config.intermediate_catalog_location}"""
             )
@@ -71,7 +78,10 @@ class ReplicationProvider(BaseProvider):
         return replication_config.source_catalog
 
     def process_schema_concurrently(
-        self, schema_name: str, table_list: List
+        self,
+        schema_name: str,
+        table_list: List[TableConfig],
+        volume_list: List[VolumeConfig],
     ) -> List[RunResult]:
         """Override to add replication-specific schema setup."""
         replication_config = self.catalog_config.replication_config
@@ -87,7 +97,7 @@ class ReplicationProvider(BaseProvider):
             self.catalog_config.catalog_name, schema_name
         )
 
-        return super().process_schema_concurrently(schema_name, table_list)
+        return super().process_schema_concurrently(schema_name, table_list, volume_list)
 
     def _replicate_table(
         self,
@@ -330,6 +340,218 @@ class ReplicationProvider(BaseProvider):
                 attempt_number=attempt,
                 max_attempts=max_attempts,
             )
+
+    def _replicate_volume(self, schema_name: str, volume_name: str) -> RunResult:
+        """
+        Replicate a single volume.
+
+        Args:
+            schema_name: Schema name
+            volume_name: Volume name to replicate
+
+        Returns:
+            RunResult object for the replication operation
+        """
+        start_time = datetime.now(timezone.utc)
+        replication_config = self.catalog_config.replication_config
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+        source_volume = f"{source_catalog}.{schema_name}.{volume_name}"
+        target_volume = f"{target_catalog}.{schema_name}.{volume_name}"
+
+        attempt = 1
+        max_attempts = self.retry.max_attempts
+        source_volume_type = None
+
+        try:
+            self.logger.info(
+                f"Starting volume replication: {source_volume} -> {target_volume}",
+                extra={"run_id": self.run_id, "operation": "replication"},
+            )
+
+            # Check if source volume exists
+            if not self.db_ops.refresh_volume_metadata(source_volume):
+                raise ReplicationError(f"Source volume does not exist: {source_volume}")
+
+            # Get source volume type to determine replication strategy
+            source_volume_type = self.db_ops.get_volume_type(source_volume)
+            is_external = (
+                source_volume_type and source_volume_type.upper() == "EXTERNAL"
+            )
+
+            # Use custom retry decorator with logging
+            @retry_with_logging(self.retry, self.logger)
+            def volume_replication_operation(query: str):
+                self.spark.sql(query)
+                return True
+
+            # Determine replication strategy based on volume type
+            if is_external:
+                # External volumes: use external location mapping
+                replication_query = self._build_external_volume_query(
+                    source_volume, target_volume
+                )
+            else:
+                # Managed volumes: use CREATE VOLUME AS DEEP CLONE
+                replication_query = f"CREATE VOLUME IF NOT EXISTS {target_volume} AS DEEP CLONE {source_volume}"
+
+            # Execute the replication
+            result, last_exception, attempt, max_attempts = (
+                volume_replication_operation(replication_query)
+            )
+
+            end_time = datetime.now(timezone.utc)
+            duration = (end_time - start_time).total_seconds()
+
+            if result:
+                self.logger.info(
+                    f"Volume replication completed successfully: {source_volume} -> {target_volume} "
+                    f"({duration:.2f}s)",
+                    extra={"run_id": self.run_id, "operation": "replication"},
+                )
+
+                return RunResult(
+                    operation_type="replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    object_name=volume_name,
+                    object_type="volume",
+                    status="success",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    details={
+                        "target_volume": target_volume,
+                        "source_volume": source_volume,
+                        "volume_type": source_volume_type,
+                        "replication_query": replication_query,
+                    },
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+
+            error_msg = (
+                f"Volume replication failed after {max_attempts} attempts: "
+                f"{source_volume} -> {target_volume}"
+            )
+            if last_exception:
+                error_msg += f" | Last error: {str(last_exception)}"
+
+            self.logger.error(
+                error_msg,
+                extra={"run_id": self.run_id, "operation": "replication"},
+            )
+
+            return RunResult(
+                operation_type="replication",
+                catalog_name=target_catalog,
+                schema_name=schema_name,
+                object_name=volume_name,
+                object_type="volume",
+                status="failed",
+                start_time=start_time.isoformat(),
+                end_time=end_time.isoformat(),
+                error_message=error_msg,
+                details={
+                    "target_volume": target_volume,
+                    "source_volume": source_volume,
+                    "volume_type": source_volume_type,
+                },
+                attempt_number=attempt,
+                max_attempts=max_attempts,
+            )
+
+        except Exception as e:
+            end_time = datetime.now(timezone.utc)
+            duration = (end_time - start_time).total_seconds()
+
+            # Wrap in ReplicationError for better error categorization
+            if not isinstance(e, ReplicationError):
+                e = ReplicationError(f"Volume replication operation failed: {str(e)}")
+
+            error_msg = f"Failed to replicate volume {source_volume}: {str(e)}"
+            self.logger.error(
+                error_msg,
+                extra={"run_id": self.run_id, "operation": "replication"},
+                exc_info=True,
+            )
+
+            return RunResult(
+                operation_type="replication",
+                catalog_name=target_catalog,
+                schema_name=schema_name,
+                object_name=volume_name,
+                object_type="volume",
+                status="failed",
+                start_time=start_time.isoformat(),
+                end_time=end_time.isoformat(),
+                duration_seconds=duration,
+                error_message=error_msg,
+                details={
+                    "target_volume": target_volume,
+                    "source_volume": source_volume,
+                    "volume_type": source_volume_type,
+                },
+                attempt_number=attempt,
+                max_attempts=max_attempts,
+            )
+
+    def _build_external_volume_query(
+        self, source_volume: str, target_volume: str
+    ) -> str:
+        """
+        Build query for external volume replication using location mapping.
+
+        Args:
+            source_volume: Source volume name
+            target_volume: Target volume name
+
+        Returns:
+            SQL query to create external volume
+        """
+        # Get source volume location
+        try:
+            source_location = (
+                self.spark.sql(f"DESCRIBE VOLUME {source_volume}")
+                .filter("info_name = 'Volume Path'")
+                .collect()[0]["info_value"]
+            )
+        except Exception:
+            raise ReplicationError(
+                f"Cannot get location for source volume: {source_volume}"
+            )
+
+        if not self.external_location_mapping:
+            raise ReplicationError(
+                "external_location_mapping is required for external volume replication"
+            )
+
+        # Find matching source external location
+        source_external_location = None
+        target_external_location = None
+
+        for src_location, tgt_location in self.external_location_mapping.items():
+            if source_location.startswith(src_location):
+                source_external_location = src_location
+                target_external_location = tgt_location
+                break
+
+        if not source_external_location:
+            raise ReplicationError(
+                f"No external location mapping found for source volume location: {source_location}"
+            )
+
+        # Construct target location
+        relative_path = source_location[len(source_external_location) :].lstrip("/")
+        target_location = (
+            f"{target_external_location.rstrip('/')}/{relative_path}"
+            if relative_path
+            else target_external_location
+        )
+
+        return (
+            f"CREATE VOLUME IF NOT EXISTS {target_volume} LOCATION '{target_location}'"
+        )
 
     def _replicate_via_intermediate(
         self,

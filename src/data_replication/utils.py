@@ -31,6 +31,15 @@ def create_spark_session(host, token, cluster_id) -> DatabricksSession:
     return spark
 
 
+def validate_spark_session(spark: DatabricksSession, workspace_url: str) -> bool:
+    """Validate if the Spark session is connected to the right Databricks workspace."""
+    spark_workspace_url = spark.conf.get("spark.databricks.workspaceUrl")
+    return spark_workspace_url == workspace_url
+
+def get_workspace_url_from_host(host: str) -> str:
+    """Extract the workspace URL from the host."""
+    return host.replace("https://", "").replace("http://", "").split("/")[0]
+
 def retry_with_logging(
     retry_config: RetryConfig, logger: Optional[DataReplicationLogger] = None
 ):
