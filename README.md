@@ -87,7 +87,7 @@ Object level result details are recorded in configurable audit table location in
 |-------------|-----------|-------------|
 | run_id | STRING | Unique identifier for each execution run |
 | logging_time | TIMESTAMP | When the log entry was created |
-| operation_type | STRING | Type of operation (backup, uc_replication, reconciliation) |
+| operation_type | STRING | Type of operation (backup,replication,uc_replication,reconciliation) |
 | catalog_name | STRING | Target catalog name |
 | schema_name | STRING | Target schema name |
 | object_name | STRING | Target Object name |
