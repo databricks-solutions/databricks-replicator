@@ -36,11 +36,14 @@ def create_spark_session(
         os.environ["DATABRICKS_CLUSTER_ID"] = cluster_id
         spark = DatabricksSession.builder.getOrCreate()
         return spark
-
-    # Create Databricks session with serverless compute
-    spark = DatabricksSession.builder.serverless(True).getOrCreate()
-    return spark
-
+    try:
+        # Create Databricks session with default compute
+        spark = DatabricksSession.builder.getOrCreate()
+        return spark
+    except Exception:
+        # Fallback on Creating Databricks session with serverless compute
+        spark = DatabricksSession.builder.serverless(True).getOrCreate()
+        return spark
 
 def get_spark_workspace_url(spark: DatabricksSession) -> str:
     """Get the workspace URL from the Spark session configuration."""

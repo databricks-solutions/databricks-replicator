@@ -107,10 +107,11 @@ Object level result details are recorded in configurable audit table location in
 - User or Service Principal in source and target workspace created with metastore admin right. If metastore admin permission is not available, check <a href=./permissions.md>here</a> to apply more granular UC access control 
 - PAT or OAuth Token for user or sp created and stored in Databricks Key Vault.
 **Note**: if this tool is run in source workspace, only target workspace token secrets need to be created in source. Conversely, if run in target workspace, source token needs to be created in target.
-- If not running using Serverless, cluster id for all-purpose cluster in source or/and workspace
 - For cross-metastore replication, enable Delta Sharing (DS) including network connectivity https://docs.databricks.com/aws/en/delta-sharing/set-up#gsc.tab=0
 - Network connectivity to source or target workspace. e.g. if tool runs in source workspace, source data plane (outbound) should be able to establish connect to target workspace control plane (inbound). And vica versa.
 **Note**: UC replication requires connect to both source and target workspace as delta share is not used.
+- If tool is not running outside of Databricks Workspace and Serverless is available in source and/or target workspace, cluster id for all-purpose cluster in source or/and target workspace
+
 
 ## Getting Started
 
