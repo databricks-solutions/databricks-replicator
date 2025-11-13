@@ -9,7 +9,7 @@ source_databricks_connect_config:
   name: "azure"
   # Optional: source metastore id. Required if replication_config.create_shared_catalog is true and source spark can not be created.e.g. due to network restriction.
   sharing_identifier: "azure:eastus2:b86c6879-8c55-4e70-a585-18d16a4fa6e9"
-  # Mandatory: Source Databricks workspace url
+  # Mandatory: Source Databricks workspace url. Must be provided at args level(highest priority), replication group level (lowest priority).
   host: "https://adb-984752964297111.11.azuredatabricks.net/"
   # Optional: Source Databricks access token secret details. Required if job is run outside source Databricks workspace.
   token:
@@ -24,7 +24,7 @@ target_databricks_connect_config:
   name: "aws"
   # Optional: target metastore id. Required if backup_config.create_recipient is true and target spark can not be created.e.g. due to network restriction.
   sharing_identifier: "aws:us-west-2:b169b504-4c54-49f2-bc3a-adf4b128f36d"
-  # Mandatory: Target Databricks workspace url
+  # Mandatory: Target Databricks workspace url. Must be provided at args level(highest priority), replication group level (lowest priority).
   host: "https://e2-demo-field-eng.cloud.databricks.com/"
   # Optional: Target Databricks access token secret details. Required if job is run outside target Databricks workspace.
   token:
