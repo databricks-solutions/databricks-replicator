@@ -9,6 +9,7 @@ import os
 import time
 from functools import wraps
 from typing import Optional
+from tenacity import retry, wait_exponential, stop_after_attempt
 
 from databricks.connect import DatabricksSession
 from databricks.sdk import WorkspaceClient
@@ -30,13 +31,13 @@ def get_token_from_secret(
             secret_config.secret_client_secret,
         )
         return client_id, client_secret
-     # Default to PAT
+    # Default to PAT
     return workspace_client.dbutils.secrets.get(
         secret_config.secret_scope,
         secret_config.secret_pat,
     )
 
-
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=10, max=60))
 def create_spark_session(
     host: str,
     secret_config: SecretConfig,
