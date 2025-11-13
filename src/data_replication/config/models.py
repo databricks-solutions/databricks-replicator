@@ -31,6 +31,11 @@ class VolumeType(str, Enum):
     EXTERNAL = "external"
     ALL = "all"
 
+class AuthType(str, Enum):
+    """Enumeration of authentication types."""
+
+    PAT = "pat"
+    OAUTH = "oauth"
 
 class UCObjectType(str, Enum):
     """Enumeration of Unity Catalog object types for replication."""
@@ -52,9 +57,20 @@ class SecretConfig(BaseModel):
     """Configuration for Databricks secrets."""
 
     secret_scope: str
-    secret_key: str
+    secret_pat: Optional[str] = None
+    secret_client_id: Optional[str] = None
+    secret_client_secret: Optional[str] = None
 
-
+    @model_validator(mode="after")
+    def validate_secret_fields(self):
+        """Ensure at least one secret field is provided."""
+        if not any([self.secret_pat, self.secret_client_id, self.secret_client_secret]):
+            raise ValueError("At least one secret field must be provided")
+        if self.secret_client_id and not self.secret_client_secret:
+            raise ValueError("secret_client_secret is required when secret_client_id is provided")
+        if self.secret_client_secret and not self.secret_client_id:
+            raise ValueError("secret_client_id is required when secret_client_secret is provided")
+        return self
 class AuditConfig(BaseModel):
     """Configuration for audit tables"""
 
@@ -86,6 +102,7 @@ class DatabricksConnectConfig(BaseModel):
     name: str
     sharing_identifier: Optional[str] = None
     host: str
+    auth_type: Optional[AuthType] = AuthType.PAT
     token: Optional[SecretConfig] = None
     cluster_id: Optional[str] = None
 

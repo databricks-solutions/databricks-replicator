@@ -110,7 +110,7 @@ Object level result details are recorded in configurable audit table location in
 - For cross-metastore replication, enable Delta Sharing (DS) including network connectivity https://docs.databricks.com/aws/en/delta-sharing/set-up#gsc.tab=0
 - Network connectivity to source or target workspace. e.g. if tool runs in source workspace, source data plane (outbound) should be able to establish connect to target workspace control plane (inbound). And vica versa.
 **Note**: UC replication requires connect to both source and target workspace as delta share is not used.
-- If tool is not running outside of Databricks Workspace and Serverless is available in source and/or target workspace, cluster id for all-purpose cluster in source or/and target workspace
+- If tool is running outside of Databricks Workspace and Serverless is unavailable in source and/or target workspace, cluster id for all-purpose cluster in source or/and target workspace
 
 
 ## Getting Started

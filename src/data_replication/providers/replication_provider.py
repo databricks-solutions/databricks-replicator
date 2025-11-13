@@ -43,6 +43,7 @@ class ReplicationProvider(BaseProvider):
             and not self.source_databricks_config.sharing_identifier
         ):
             source_host = self.source_databricks_config.host
+            source_auth_type = self.source_databricks_config.auth_type
             source_secret_config = self.source_databricks_config.token
             source_cluster_id = self.source_databricks_config.cluster_id
             self.source_spark = create_spark_session(
@@ -50,6 +51,7 @@ class ReplicationProvider(BaseProvider):
                 secret_config=source_secret_config,
                 cluster_id=source_cluster_id,
                 workspace_client=self.workspace_client,
+                auth_type=source_auth_type,
             )
             validate_spark_session(
                 self.source_spark, get_workspace_url_from_host(source_host)

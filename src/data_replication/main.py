@@ -67,11 +67,12 @@ def run_backup(
     else:
         # Create source Spark session
         source_host = config.source_databricks_connect_config.host
+        source_auth_type = config.source_databricks_connect_config.auth_type
         source_secret_config = config.source_databricks_connect_config.token
         source_cluster_id = config.source_databricks_connect_config.cluster_id
         # create and validate Spark sessions
         spark = create_spark_session(
-            source_host, source_secret_config, source_cluster_id, workspace_client
+            source_host, source_secret_config, source_cluster_id, workspace_client, source_auth_type
         )
         if not validate_spark_session(spark, get_workspace_url_from_host(source_host)):
             logger.error(
@@ -104,10 +105,11 @@ def run_replication(
     else:
         # Create target Spark session
         target_host = config.target_databricks_connect_config.host
+        target_auth_type = config.target_databricks_connect_config.auth_type
         target_secret_config = config.target_databricks_connect_config.token
         target_cluster_id = config.target_databricks_connect_config.cluster_id
         spark = create_spark_session(
-            target_host, target_secret_config, target_cluster_id, workspace_client
+            target_host, target_secret_config, target_cluster_id, workspace_client, target_auth_type
         )
         if not validate_spark_session(spark, get_workspace_url_from_host(target_host)):
             logger.error(
@@ -139,10 +141,11 @@ def run_reconciliation(
     else:
         # Create target Spark session
         target_host = config.target_databricks_connect_config.host
+        target_auth_type = config.target_databricks_connect_config.auth_type
         target_secret_config = config.target_databricks_connect_config.token
         target_cluster_id = config.target_databricks_connect_config.cluster_id
         spark = create_spark_session(
-            target_host, target_secret_config, target_cluster_id, workspace_client
+            target_host, target_secret_config, target_cluster_id, workspace_client, target_auth_type
         )
         if not validate_spark_session(spark, get_workspace_url_from_host(target_host)):
             logger.error(
@@ -225,15 +228,17 @@ def main():
 
         if config.audit_config.logging_workspace == "source":
             logging_host = config.source_databricks_connect_config.host
+            logging_auth_type = config.source_databricks_connect_config.auth_type
             logging_secret_config = config.source_databricks_connect_config.token
             logging_cluster_id = config.source_databricks_connect_config.cluster_id
         else:
             logging_host = config.target_databricks_connect_config.host
+            logging_auth_type = config.target_databricks_connect_config.auth_type
             logging_secret_config = config.target_databricks_connect_config.token
             logging_cluster_id = config.target_databricks_connect_config.cluster_id
 
         logging_spark = create_spark_session(
-            logging_host, logging_secret_config, logging_cluster_id, w
+            logging_host, logging_secret_config, logging_cluster_id, w, logging_auth_type
         )
         logging_workspace_url = get_workspace_url_from_host(logging_host)
 

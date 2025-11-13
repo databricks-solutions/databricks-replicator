@@ -13,7 +13,28 @@ from typing import Optional
 from databricks.connect import DatabricksSession
 from databricks.sdk import WorkspaceClient
 from .audit.logger import DataReplicationLogger
-from .config.models import RetryConfig, SecretConfig
+from .config.models import AuthType, RetryConfig, SecretConfig
+
+
+def get_token_from_secret(
+    secret_config: SecretConfig, workspace_client: WorkspaceClient, auth_type: AuthType
+):
+    """Retrieve the authentication token from Databricks secrets."""
+    if auth_type == AuthType.OAUTH:
+        client_id = workspace_client.dbutils.secrets.get(
+            secret_config.secret_scope,
+            secret_config.secret_client_id,
+        )
+        client_secret = workspace_client.dbutils.secrets.get(
+            secret_config.secret_scope,
+            secret_config.secret_client_secret,
+        )
+        return client_id, client_secret
+     # Default to PAT
+    return workspace_client.dbutils.secrets.get(
+        secret_config.secret_scope,
+        secret_config.secret_pat,
+    )
 
 
 def create_spark_session(
@@ -21,17 +42,27 @@ def create_spark_session(
     secret_config: SecretConfig,
     cluster_id: str,
     workspace_client: WorkspaceClient,
+    auth_type: AuthType,
 ) -> DatabricksSession:
     """Create a Databricks Spark session using the provided host and token."""
-    token = None
+    if not host:
+        raise ValueError("Host URL must be provided to create Spark session.")
+    os.environ["DATABRICKS_HOST"] = host
+
+    client_id = None
+    client_secret = None
+    pat = None
     if secret_config:
-        token = workspace_client.dbutils.secrets.get(
-            secret_config.secret_scope,
-            secret_config.secret_key,
-        )
-    if host and token:
-        os.environ["DATABRICKS_HOST"] = host
-        os.environ["DATABRICKS_TOKEN"] = token
+        if auth_type == AuthType.OAUTH:
+            client_id, client_secret = get_token_from_secret(
+                secret_config, workspace_client, auth_type
+            )
+            os.environ["DATABRICKS_CLIENT_ID"] = client_id
+            os.environ["DATABRICKS_CLIENT_SECRET"] = client_secret
+        else:
+            pat = get_token_from_secret(secret_config, workspace_client, auth_type)
+            os.environ["DATABRICKS_HOST"] = host
+            os.environ["DATABRICKS_TOKEN"] = pat
     if cluster_id:
         os.environ["DATABRICKS_CLUSTER_ID"] = cluster_id
         spark = DatabricksSession.builder.getOrCreate()
@@ -44,6 +75,7 @@ def create_spark_session(
         # Fallback on Creating Databricks session with serverless compute
         spark = DatabricksSession.builder.serverless(True).getOrCreate()
         return spark
+
 
 def get_spark_workspace_url(spark: DatabricksSession) -> str:
     """Get the workspace URL from the Spark session configuration."""
@@ -135,12 +167,17 @@ def retry_with_logging(
 
     return decorator
 
+
 def merge_maps(source_maps: list, target_maps: list, overwrite: bool) -> dict:
     """Merge source and target maps based on overwrite setting."""
     merged_maps = (
-        {k: v for d in source_maps for k, v in d.items() if v is not None} if source_maps else {}
+        {k: v for d in source_maps for k, v in d.items() if v is not None}
+        if source_maps
+        else {}
     )
     if not overwrite and target_maps:
-        existing_maps = {k: v for d in target_maps for k, v in d.items() if v is not None}
+        existing_maps = {
+            k: v for d in target_maps for k, v in d.items() if v is not None
+        }
         merged_maps = {**merged_maps, **existing_maps}
     return merged_maps

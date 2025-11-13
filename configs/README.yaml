@@ -11,10 +11,14 @@ source_databricks_connect_config:
   sharing_identifier: "azure:eastus2:b86c6879-8c55-4e70-a585-18d16a4fa6e9"
   # Mandatory: Source Databricks workspace url. Must be provided at args level(highest priority), replication group level (lowest priority).
   host: "https://adb-984752964297111.11.azuredatabricks.net/"
+  # Optional: Source Databricks authentication type, pat or oauth. default is "pat".
+  auth_type: "pat"
   # Optional: Source Databricks access token secret details. Required if job is run outside source Databricks workspace.
   token:
     secret_scope: "my_secret_scope"
-    secret_key: "azure_pat"
+    secret_pat: "azure_pat"
+    secret_client_id: null
+    secret_client_secret: null
   # Optional: Source cluster ID. default is null to use serverless endpoint.
   cluster_id: null
 
@@ -26,10 +30,14 @@ target_databricks_connect_config:
   sharing_identifier: "aws:us-west-2:b169b504-4c54-49f2-bc3a-adf4b128f36d"
   # Mandatory: Target Databricks workspace url. Must be provided at args level(highest priority), replication group level (lowest priority).
   host: "https://e2-demo-field-eng.cloud.databricks.com/"
+  # Optional: Source Databricks authentication type, pat or oauth. default is "pat".
+  auth_type: "pat"  
   # Optional: Target Databricks access token secret details. Required if job is run outside target Databricks workspace.
   token:
     secret_scope: "my_secret_scope"
-    secret_key: "aws_pat"
+    secret_pat: "aws_pat"
+    secret_client_id: null
+    secret_client_secret: null    
   # Optional: Source cluster ID. default is null to use serverless endpoint.
   cluster_id: null
 

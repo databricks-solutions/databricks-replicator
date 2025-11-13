@@ -36,6 +36,7 @@ class BackupProvider(BaseProvider):
             and not self.target_databricks_config.sharing_identifier
         ):
             target_host = self.target_databricks_config.host
+            target_auth_type = self.target_databricks_config.auth_type
             target_secret_config = self.target_databricks_config.token
             target_cluster_id = self.target_databricks_config.cluster_id
             self.target_spark = create_spark_session(
@@ -43,6 +44,7 @@ class BackupProvider(BaseProvider):
                 secret_config=target_secret_config,
                 cluster_id=target_cluster_id,
                 workspace_client=self.workspace_client,
+                auth_type=target_auth_type,
             )
             validate_spark_session(
                 self.target_spark, get_workspace_url_from_host(target_host)

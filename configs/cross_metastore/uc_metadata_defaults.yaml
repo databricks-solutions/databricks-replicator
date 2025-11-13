@@ -13,14 +13,14 @@ source_databricks_connect_config:
   host: "https://adb-984752964297111.11.azuredatabricks.net"  
   token:
     secret_scope: "test_kr"
-    secret_key: "pat_source"
+    secret_pat: "pat_source"
 
 target_databricks_connect_config:
   name: "aws"
   host: "https://e2-demo-field-eng.cloud.databricks.com"  
   token:
     secret_scope: "test_kr"
-    secret_key: "pat_target"
+    secret_pat: "pat_target"
 
 external_location_mapping:
   "abfss://aaboode@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/aaron2"
