@@ -1,0 +1,51 @@
+resources:
+  jobs:
+    uc_replication:
+      name: uc_replication
+      tasks:
+        - task_key: replication
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/data_replication/main.py
+            parameters:
+              - "{{job.parameters.config_path}}"
+              - -o
+              - replication
+              - --run-id
+              - "{{job.parameters.run_id}}"
+              - --uc-object-types
+              - "{{job.parameters.uc_object_types}}"
+              - --target-catalogs
+              - "{{job.parameters.target_catalogs}}"
+              - --target-schemas
+              - "{{job.parameters.target_schemas}}"
+              - --target-tables
+              - "{{job.parameters.target_tables}}"
+              - --concurrency
+              - "{{job.parameters.concurrency}}"
+          environment_key: Default
+      tags:
+        dev: aaron_pan
+      queue:
+        enabled: true
+      parameters:
+        - name: concurrency
+          default: "5"
+        - name: config_path
+          default: ${workspace.file_path}/configs/cross_metastore/uc_metadata_defaults.yaml
+        - name: run_id
+          default: "{{job.run_id}}"
+        - name: uc_object_types
+          default: "all"
+        - name: target_catalogs
+          default: "aaron_replication"
+        - name: target_schemas
+          default: ""
+        - name: target_tables
+          default: ""
+      run_as:
+        user_name: aaron.pan@databricks.com
+      environments:
+        - environment_key: Default
+          spec:
+            client: "3"
+      performance_target: PERFORMANCE_OPTIMIZED
