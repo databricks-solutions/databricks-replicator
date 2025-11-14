@@ -7,12 +7,6 @@ bundle:
 include:
   - resources/*.yml
 
-artifacts:
-  default:
-    type: whl
-    build: python3 setup.py bdist_wheel
-    path: .
-
 targets:
   dev:
     # The default target uses 'mode: development' to create a development copy.

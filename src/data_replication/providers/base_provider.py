@@ -245,7 +245,8 @@ class BaseProvider(ABC):
                 uc_object_types_catalog = self.catalog_config.uc_object_types.copy()
                 run_result = self._replicate_catalog_tags()
                 results.extend(run_result)
-                uc_object_types_catalog.remove(UCObjectType.CATALOG_TAG)
+                if UCObjectType.ALL not in uc_object_types_catalog:
+                    uc_object_types_catalog.remove(UCObjectType.CATALOG_TAG)
                 # immediately return if no other object types to process
                 if len(uc_object_types_catalog) == 0:
                     return results
@@ -272,7 +273,8 @@ class BaseProvider(ABC):
                     uc_object_types_schema = uc_object_types_catalog.copy()
                     run_result = self._replicate_schema_tags(schema_name)
                     results.extend(run_result)
-                    uc_object_types_schema.remove(UCObjectType.SCHEMA_TAG)
+                    if UCObjectType.ALL not in uc_object_types_catalog:                    
+                        uc_object_types_schema.remove(UCObjectType.SCHEMA_TAG)
                     # continue to next schema if no other object types to process
                     if len(uc_object_types_schema) == 0:
                         continue
