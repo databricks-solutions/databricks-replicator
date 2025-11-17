@@ -211,6 +211,7 @@ def main():
             target_catalog_override=args.target_catalogs,
             target_schemas_override=args.target_schemas,
             target_tables_override=args.target_tables,
+            table_filter_expression_override=args.table_filter_expression,
             concurrency_override=args.concurrency,
             uc_object_types_override=uc_object_types_override,
             table_types_override=table_types_override,

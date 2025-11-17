@@ -671,8 +671,9 @@ class BaseProvider(ABC):
         Returns:
             List of table names to process
         """
-        # Find exclusions for this schema from configuration
+        # Find exclusions and table filter expression for this schema from configuration
         exclude_names = set()
+        table_filter_expression = None
         if self.catalog_config.target_schemas:
             for schema_config in self.catalog_config.target_schemas:
                 if schema_config.schema_name == schema_name:
@@ -680,11 +681,19 @@ class BaseProvider(ABC):
                         exclude_names = {
                             table.table_name for table in schema_config.exclude_tables
                         }
+                    table_filter_expression = schema_config.table_filter_expression
                     break
 
         if table_list:
             # Use explicitly configured tables
             tables = [item.table_name for item in table_list]
+        elif table_filter_expression:
+            # Use table filter expression
+            tables = self.db_ops.get_tables_by_filter(
+                self.catalog_name,
+                schema_name,
+                table_filter_expression,
+            )
         else:
             # Process all tables in the schema
             tables = self.db_ops.get_tables_in_schema(self.catalog_name, schema_name)

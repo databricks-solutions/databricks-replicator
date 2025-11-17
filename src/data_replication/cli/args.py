@@ -140,6 +140,25 @@ def validate_args(args) -> None:
                 f"but got {len(schema_names)}: {', '.join(schema_names)}"
             )
 
+    # Rule: table-filter-expression and target-tables cannot be used together
+    if args.table_filter_expression and args.target_tables:
+        raise ValueError(
+            "table-filter-expression and target-tables cannot be used together. "
+            "Use either --table-filter-expression to filter tables by SQL expression "
+            "or --target-tables to specify exact table names, but not both."
+        )
+
+    # Rule: when table-filter-expression is provided, target-schemas and target-catalogs must be provided
+    if args.table_filter_expression:
+        if not args.target_schemas:
+            raise ValueError(
+                "When table-filter-expression is provided, target-schemas must also be provided"
+            )
+        if not args.target_catalogs:
+            raise ValueError(
+                "When table-filter-expression is provided, target-catalogs must also be provided"
+            )
+
 
 def setup_argument_parser():
     """Setup and configure the command line argument parser."""
@@ -188,6 +207,13 @@ def setup_argument_parser():
         "-tb",
         type=str,
         help="list of tables separated by comma, e.g. table1,table2",
+    )
+
+    parser.add_argument(
+        "--table-filter-expression",
+        "-tfe",
+        type=str,
+        help="SQL filter expression to select tables within schemas, e.g. \"tableName like 'fact_%%'\" (use quotes in shell)",
     )
 
     parser.add_argument(

@@ -137,6 +137,7 @@ class SchemaConfig(BaseModel):
     schema_name: str
     tables: Optional[List[TableConfig]] = None
     exclude_tables: Optional[List[TableConfig]] = None
+    table_filter_expression: Optional[str] = None
     volumes: Optional[List[VolumeConfig]] = None
     exclude_volumes: Optional[List[VolumeConfig]] = None
 
@@ -650,6 +651,16 @@ class ReplicationSystemConfig(BaseModel):
                     'schema_filter_expression' and 'target_schemas' must not be provided at the same time in catalog: {catalog.catalog_name}
             """
                 )
+
+            # Validate table_filter_expression usage within target_schemas
+            if catalog.target_schemas:
+                for schema in catalog.target_schemas:
+                    if schema.table_filter_expression and schema.tables:
+                        raise ValueError(
+                            f"""
+                            'table_filter_expression' and 'tables' must not be provided at the same time in schema: {schema.schema_name} of catalog: {catalog.catalog_name}
+                    """
+                        )
 
             # Validate streaming table constraints
             has_streaming_table = (

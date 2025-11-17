@@ -210,6 +210,10 @@ target_catalogs:
         # Optional: exclude specific volumes in the schema. if not provided, all volumes are included.
         exclude_volumes:
           - volume_name: "old_volume"
+      - schema_name: "bonze_4"
+        # Optional: filter to select specific tables in the schema using SQL expression.
+        # config table_filter_expression and tables at the same time not allowed.
+        table_filter_expression: "tableName like 'fact_%' or tableName like 'dim_%'"
     # Optional: exclude_schema list.
     exclude_schemas:
       # Optional: exclude specific schemas in the catalog.

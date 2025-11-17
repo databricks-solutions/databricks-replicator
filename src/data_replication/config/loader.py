@@ -36,6 +36,7 @@ class ConfigLoader:
         target_catalog_override: str = None,
         target_schemas_override: str = None,
         target_tables_override: str = None,
+        table_filter_expression_override: str = None,
         concurrency_override: int = None,
         uc_object_types_override: list = None,
         table_types_override: list = None,
@@ -54,6 +55,8 @@ class ConfigLoader:
             target_catalog_override: Target catalog name to override in config
             target_tables_override: Comma-separated string of table names
                 (e.g., "table1,table2")
+            table_filter_expression_override: SQL filter expression to select tables
+                (e.g., "tableName like 'fact_%'")
             concurrency_override: integer containing concurrency configuration override
             uc_object_types_override: List of UCObjectType enums to override in config
             table_types_override: List of TableType enums to override in config
@@ -234,6 +237,8 @@ class ConfigLoader:
                 for schema_name in schema_names:
                     # Handle target_tables override
                     validated_tables = []
+                    filter_expression = None
+                    
                     if target_tables_override:
                         # Parse comma-separated table names
                         table_names = [
@@ -246,9 +251,16 @@ class ConfigLoader:
                                 validated_tables.append(
                                     TableConfig(table_name=table_name)
                                 )
+                    elif table_filter_expression_override:
+                        # Use table filter expression instead of explicit tables
+                        filter_expression = table_filter_expression_override
 
                     validated_schemas.append(
-                        SchemaConfig(schema_name=schema_name, tables=validated_tables)
+                        SchemaConfig(
+                            schema_name=schema_name, 
+                            tables=validated_tables,
+                            table_filter_expression=filter_expression
+                        )
                     )
 
                 # Apply override to all target catalogs

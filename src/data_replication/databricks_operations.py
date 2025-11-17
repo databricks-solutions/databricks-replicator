@@ -301,6 +301,36 @@ class DatabricksOperations:
             print(f"Warning: Could not filter schemas in `{catalog_name}`: {e}")
             return []
 
+    def get_tables_by_filter(
+        self, catalog_name: str, schema_name: str, filter_expression: str
+    ) -> List[str]:
+        """
+        Get tables matching a filter expression.
+
+        Args:
+            catalog_name: Name of the catalog
+            schema_name: Name of the schema
+            filter_expression: SQL filter expression
+
+        Returns:
+            List of table names matching the filter
+        """
+        try:
+            full_schema = f"`{catalog_name}`.`{schema_name}`"
+            
+            # Get all tables first
+            tables_df = self.spark.sql(f"SHOW TABLES IN {full_schema}").filter(
+                "isTemporary == false"
+            )
+
+            # Apply filter expression
+            filtered_df = tables_df.filter(filter_expression)
+
+            return [row.tableName for row in filtered_df.collect()]
+        except Exception as e:
+            print(f"Warning: Could not filter tables in `{catalog_name}`.`{schema_name}`: {e}")
+            return []
+
     def describe_table_detail(self, table_name: str) -> dict:
         """
         Get detailed information about a table.
