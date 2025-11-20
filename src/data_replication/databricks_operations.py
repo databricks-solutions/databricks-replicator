@@ -361,7 +361,7 @@ class DatabricksOperations:
             )
             return {"properties": properties}
 
-    @retry_with_logging(retry_config=RetryConfig(retries=5, delay=3))
+    @retry_with_logging(retry_config=RetryConfig(retries=1, delay=1))
     def refresh_table_metadata(self, table_name: str) -> bool:
         """
         Check if a table exists.
