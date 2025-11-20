@@ -297,7 +297,7 @@ class DatabricksOperations:
             # Catalog might not exist or be accessible
             return []
 
-    @retry_with_logging(retry_config=RetryConfig(retries=5, delay=3))
+    @retry_with_logging(retry_config=RetryConfig(retries=2, delay=2))
     def refresh_schema_metadata(self, schema_name: str) -> bool:
         """
         Check if a schema exists.
