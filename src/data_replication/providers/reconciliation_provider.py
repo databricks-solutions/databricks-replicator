@@ -61,7 +61,10 @@ class ReconciliationProvider(BaseProvider):
 
     def process_table(self, schema_name: str, table_name: str) -> RunResult:
         """Process a single table for reconciliation."""
-        return self._reconcile_table(schema_name, table_name)
+        results = self._reconcile_table(schema_name, table_name)
+        if results:
+            self.audit_logger.log_results(results)
+        return results
 
     def _get_filtered_table_reference(self, table_name: str, is_source: bool) -> str:
         """Get table reference with optional filter applied."""

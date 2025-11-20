@@ -72,7 +72,10 @@ class BackupProvider(BaseProvider):
 
     def process_table(self, schema_name: str, table_name: str) -> RunResult:
         """Process a single table for backup."""
-        return self._backup_table(schema_name, table_name)
+        results = self._backup_table(schema_name, table_name)
+        if results:
+            self.audit_logger.log_results(results)
+        return results
 
     def setup_operation_catalogs(self) -> str:
         """Setup backup-specific catalogs."""

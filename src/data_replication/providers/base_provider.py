@@ -149,7 +149,7 @@ class BaseProvider(ABC):
         )
 
     @abstractmethod
-    def process_table(self, schema_name: str, table_name: str) -> RunResult:
+    def process_table(self, schema_name: str, table_name: str):
         """
         Process a single table.
         Must be implemented by subclasses.
