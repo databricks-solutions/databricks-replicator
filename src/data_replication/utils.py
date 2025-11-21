@@ -17,6 +17,7 @@ from .audit.logger import DataReplicationLogger
 from .config.models import AuthType, RetryConfig, SecretConfig
 
 
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=10, max=60))
 def get_token_from_secret(
     secret_config: SecretConfig, workspace_client: WorkspaceClient, auth_type: AuthType
 ):
@@ -38,17 +39,16 @@ def get_token_from_secret(
     )
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=10, max=60))
-def create_spark_session(
+def set_envs(
     host: str,
     secret_config: SecretConfig = None,
     cluster_id: str = None,
     workspace_client: WorkspaceClient = None,
     auth_type: AuthType = None,
-) -> DatabricksSession:
-    """Create a Databricks Spark session using the provided host and token."""
+):
+    """Set environment variables for Databricks connection."""
     if not host:
-        raise ValueError("Host URL must be provided to create Spark session.")
+        raise ValueError("Host URL must be provided to set environment variables.")
     # Clear any existing environment variables to avoid conflicts
     os.environ.pop("DATABRICKS_HOST", None)
     os.environ.pop("DATABRICKS_TOKEN", None)
@@ -71,6 +71,25 @@ def create_spark_session(
             os.environ["DATABRICKS_TOKEN"] = pat
     if cluster_id:
         os.environ["DATABRICKS_CLUSTER_ID"] = cluster_id
+    os.environ["DATABRICKS_HOST"] = host
+
+
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=10, max=60))
+def create_spark_session(
+    host: str,
+    secret_config: SecretConfig = None,
+    cluster_id: str = None,
+    workspace_client: WorkspaceClient = None,
+    auth_type: AuthType = None,
+) -> DatabricksSession:
+    """Create a Databricks Spark session using the provided host and token."""
+    set_envs(
+        host=host,
+        secret_config=secret_config,
+        cluster_id=cluster_id,
+        workspace_client=workspace_client,
+        auth_type=auth_type,
+    )
     try:
         # Create Databricks session with default compute
         spark = DatabricksSession.builder.remote(host=host).getOrCreate()
@@ -80,6 +99,25 @@ def create_spark_session(
             DatabricksSession.builder.remote(host=host).serverless(True).getOrCreate()
         )
     return spark
+
+
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=10, max=60))
+def create_workspace_client(
+    host: str,
+    secret_config: SecretConfig = None,
+    workspace_client: WorkspaceClient = None,
+    auth_type: AuthType = None,
+) -> WorkspaceClient:
+    """Create a Databricks workspace client using the provided host and token."""
+
+    set_envs(
+        host=host,
+        secret_config=secret_config,
+        workspace_client=workspace_client,
+        auth_type=auth_type,
+    )
+
+    return WorkspaceClient(host=host)
 
 
 def get_spark_workspace_url(spark: DatabricksSession) -> str:

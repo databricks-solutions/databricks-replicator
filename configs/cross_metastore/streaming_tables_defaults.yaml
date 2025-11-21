@@ -35,7 +35,7 @@ backup_config:
   add_to_share: true
 replication_config:
   enabled: true
-  create_target_tables: true
+  create_target_catalog: true
   create_shared_catalog: true
 reconciliation_config:
   enabled: true

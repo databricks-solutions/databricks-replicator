@@ -31,13 +31,13 @@ target_databricks_connect_config:
   # Mandatory: Target Databricks workspace url. Must be provided at args level(highest priority), replication group level (lowest priority).
   host: "https://e2-demo-field-eng.cloud.databricks.com/"
   # Optional: Source Databricks authentication type, pat or oauth. default is "pat".
-  auth_type: "pat"  
+  auth_type: "pat"
   # Optional: Target Databricks access token secret details. Required if job is run outside target Databricks workspace.
   token:
     secret_scope: "my_secret_scope"
     secret_pat: "aws_pat"
     secret_client_id: null
-    secret_client_secret: null    
+    secret_client_secret: null
   # Optional: Source cluster ID. default is null to use serverless endpoint.
   cluster_id: null
 
@@ -62,10 +62,9 @@ external_location_mapping:
 # when volume_types is provided, files in volumes of specified types will be replicated.
 
 # Optional: replication group level. can be overriden by catalog level or args
-uc_object_types:
-  [
+uc_object_types: [
     "all",
-    # "catalog", 
+    # "catalog",
     "catalog_tag",
     # "schema",
     "schema_tag",
@@ -74,12 +73,12 @@ uc_object_types:
     "volume_tag",
     "table_tag",
     "column_tag",
-    "column_comment"
+    "column_comment",
   ]
 
 # Optional: replication group level. can be overriden by catalog level or args
 # supported types: all, streaming_table, managed, external.
-table_types: ["all","managed","streaming_table","external"]
+table_types: ["all", "managed", "streaming_table", "external"]
 
 # Optional: replication group level. can be overriden by catalog level or args
 # supported volume types: managed, external.
@@ -132,7 +131,7 @@ replication_config:
   # Optional: share name for streaming table backing table share. default to __replication_internal_<catalog_name>_to_<target_databricks_connect_config.name>_share
   backup_share_name: "__replication_internal_catalog_example_to_aws_share"
   # Optional: catalog created from backing table share. default to __replication_internal_<catalog_name>_from_<source_databricks_connect_config.name>_shared
-  backup_catalog: "__replication_internal_catalog_example_from_azure_shared"  
+  backup_catalog: "__replication_internal_catalog_example_from_azure_shared"
   # Optional: whether to create intermediate catalog for replication. default is false.
   create_intermediate_catalog: false
   # Optional: intermediate catalog for replication. default is None.
@@ -145,8 +144,32 @@ replication_config:
   overwrite_tags: true
   # Optional: whether to overwrite comments during replication. default is true.
   overwrite_comments: true
-  # Optional: whether to copy files during external table replication. default is true.
+  # Optional: whether to copy data during external table replication. default is true.
   copy_files: true
+  # Optional:  configuration for volume files replication
+  volume_config:
+    # Optional: number of concurrent file copy tasks. default is 10.
+    max_concurrent_copies: 10
+    # Optional: delete data and checkpoint on target before replication. default is false.
+    delete_and_reload: false
+    # Optional: whether to delete checkpoint before replication. default is false.
+    delete_checkpoint: false
+    # Optional: folder path under volume to replicate. default is null to replicate the whole volume.
+    folder_path: null
+    # Optional: autoloader options dictionary for streaming table replication
+    autoloader_options: null
+    # Optional: streaming timeout in seconds for streaming table replication. default is 43200 seconds (12 hours).
+    streaming_timeout_seconds: 43200
+    # Optional: whether to create detailed file ingestion logging catalog if it does not exist. default is false.
+    create_file_ingestion_logging_catalog: false
+    # Optional: detailed file ingestion logging catalog name. default to same as audit catalog.
+    file_ingestion_logging_catalog: "replication"
+    # Optional: detailed file ingestion logging catalog location. default is None.
+    file_ingestion_logging_catalog_location: null
+    # Optional: detailed file ingestion logging outputs schema name. default to same as audit schema.
+    file_ingestion_logging_schema: "audit"
+    # Optional: detailed file ingestion logging outputs schema name. default to same as audit schema.
+    file_ingestion_logging_table: "detail_file_ingestion_logging"
 
 # Optional: reconciliation configuration (at replication group level)
 reconciliation_config:
@@ -185,7 +208,7 @@ target_catalogs:
   - catalog_name: "catalog_example"
     # Optional: cataloglevel.
     # supported types: all, streaming_table, managed, external.
-    table_types: ["all","managed","streaming_table","external"]
+    table_types: ["all", "managed", "streaming_table", "external"]
     # Optional at replication group level or catalog level: supported volume types: managed, external.
     # Note: external volumes require external_location_mapping configuration above
     # supported volume types: managed, external.

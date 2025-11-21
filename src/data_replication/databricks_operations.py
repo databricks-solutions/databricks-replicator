@@ -246,10 +246,10 @@ class DatabricksOperations:
                 expanded_types.extend(["managed", "streaming_table", "external"])
             else:
                 expanded_types.append(table_type.lower())
-        
+
         # Remove duplicates while preserving order
         allowed_types = list(dict.fromkeys(expanded_types))
-        
+
         def check_table_type(table_name: str) -> tuple[str, bool]:
             """Check if table type is in allowed types"""
             try:
@@ -261,7 +261,7 @@ class DatabricksOperations:
                 return table_name, False
 
         filtered_tables = []
-        
+
         # Use ThreadPoolExecutor for parallel processing
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all table type checks
@@ -269,13 +269,13 @@ class DatabricksOperations:
                 executor.submit(check_table_type, table_name): table_name
                 for table_name in table_names
             }
-            
+
             # Collect results as they complete
             for future in as_completed(future_to_table):
                 table_name, is_included = future.result()
                 if is_included:
                     filtered_tables.append(table_name)
-        
+
         return filtered_tables
 
     def get_all_schemas(self, catalog_name: str) -> List[str]:
@@ -354,7 +354,7 @@ class DatabricksOperations:
         """
         try:
             full_schema = f"`{catalog_name}`.`{schema_name}`"
-            
+
             # Get all tables first
             tables_df = self.spark.sql(f"SHOW TABLES IN {full_schema}").filter(
                 "isTemporary == false"
@@ -365,7 +365,9 @@ class DatabricksOperations:
 
             return [row.tableName for row in filtered_df.collect()]
         except Exception as e:
-            print(f"Warning: Could not filter tables in `{catalog_name}`.`{schema_name}`: {e}")
+            print(
+                f"Warning: Could not filter tables in `{catalog_name}`.`{schema_name}`: {e}"
+            )
             return []
 
     def describe_table_detail(self, table_name: str) -> dict:
@@ -885,6 +887,7 @@ class DatabricksOperations:
             Volume type as string
         """
         try:
+            self.refresh_volume_metadata(volume_name)
             # Use DESCRIBE VOLUME to get volume information
             describe_df = self.spark.sql(f"DESCRIBE VOLUME {volume_name}")
 
@@ -898,7 +901,7 @@ class DatabricksOperations:
             print(f"Warning: Could not determine volume type for {volume_name}: {e}")
             return None
 
-    @retry_with_logging(retry_config=RetryConfig(retries=5, delay=3))
+    @retry_with_logging(retry_config=RetryConfig(retries=2, delay=2))
     def refresh_volume_metadata(self, volume_name: str) -> bool:
         """
         Check if a volume exists.

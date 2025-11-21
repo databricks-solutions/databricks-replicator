@@ -175,18 +175,7 @@ class BaseProvider(ABC):
         Returns:
             RunResult object for the operation
         """
-        # Default implementation - volumes not supported by this provider
-        start_time = datetime.now(timezone.utc)
-        return RunResult(
-            operation_type=self.get_operation_name(),
-            catalog_name=self.catalog_config.catalog_name,
-            schema_name=schema_name,
-            object_name=volume_name,
-            object_type="volume",
-            status="success",
-            start_time=start_time.isoformat(),
-            end_time=datetime.now(timezone.utc).isoformat(),
-        )
+        return None
 
     @abstractmethod
     def get_operation_name(self) -> str:
@@ -545,8 +534,6 @@ class BaseProvider(ABC):
                                 f"{catalog_name}.{schema_name}.{volume_name}: "
                                 f"{result.error_message}"
                             )
-                    if results:
-                        self.audit_logger.log_results(results)
                 except Exception as e:
                     result = self._handle_exception(
                         e,

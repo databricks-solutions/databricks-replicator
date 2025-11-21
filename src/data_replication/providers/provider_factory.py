@@ -262,7 +262,7 @@ class ProviderFactory:
                     summary_details = {
                         "total_catalogs": summary.total_catalogs,
                         "total_schemas": summary.total_schemas,
-                        "total_tables": summary.total_tables,
+                        "total_objects": summary.total_tables,
                         "successful_operations": summary.successful_operations,
                         "failed_operations": summary.failed_operations,
                         "summary_text": summary.summary,

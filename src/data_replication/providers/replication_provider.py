@@ -6,6 +6,7 @@ streaming tables, materialized views, and intermediate catalogs.
 """
 
 from datetime import datetime, timezone
+import shutil
 from typing import List
 
 from data_replication.databricks_operations import DatabricksOperations
@@ -26,6 +27,7 @@ from ..utils import (
     retry_with_logging,
     create_spark_session,
     validate_spark_session,
+    create_workspace_client
 )
 from .base_provider import BaseProvider
 
@@ -39,7 +41,12 @@ class ReplicationProvider(BaseProvider):
         self.source_dbops = None
         self.target_spark = None
         self.target_dbops = None
-
+        self.target_workspace_client = create_workspace_client(
+            host=self.target_databricks_config.host,
+            secret_config=self.target_databricks_config.token,
+            workspace_client=self.workspace_client,
+            auth_type=self.target_databricks_config.auth_type,
+        )
         # default driving spark is target spark. Create source spark for uc replication or if create_shared_catalog is True but source_databricks_connect_config.sharing_identifier is not provided
         if (
             self.catalog_config.uc_object_types
@@ -131,17 +138,16 @@ class ReplicationProvider(BaseProvider):
             self.audit_logger.log_results(results)
         return results
 
-    def process_volume(self, schema_name: str, volume_name: str) -> RunResult:
+    def process_volume(self, schema_name: str, volume_name: str) -> List[RunResult]:
         """Process a single volume for replication."""
         results = []
-        # # Check for volume replication first
-        # if (
-        #     self.catalog_config.volume_types
-        #     and len(self.catalog_config.volume_types) > 0
-        # ):
-        #     result = self._replicate_volume(schema_name, volume_name)
-        #     results.append(result)
-
+        # Check for volume replication first
+        if (
+            self.catalog_config.volume_types
+            and len(self.catalog_config.volume_types) > 0
+        ):
+            result = self._replicate_volume(schema_name, volume_name)
+            results.extend(result)
         # Check for volume tag replication
         if (
             self.catalog_config.uc_object_types
@@ -426,7 +432,8 @@ class ReplicationProvider(BaseProvider):
                 operation_type="replication",
                 catalog_name=target_catalog,
                 schema_name=schema_name,
-                table_name=table_name,
+                object_name=table_name,
+                object_type="table",
                 status="failed",
                 start_time=start_time.isoformat(),
                 end_time=end_time.isoformat(),
@@ -463,7 +470,8 @@ class ReplicationProvider(BaseProvider):
                 operation_type="replication",
                 catalog_name=target_catalog,
                 schema_name=schema_name,
-                table_name=table_name,
+                object_name=table_name,
+                object_type="table",
                 status="failed",
                 start_time=start_time.isoformat(),
                 end_time=end_time.isoformat(),
@@ -482,18 +490,380 @@ class ReplicationProvider(BaseProvider):
                 max_attempts=max_attempts,
             )
 
-    # def _replicate_volume(self, schema_name: str, volume_name: str) -> List[RunResult]:
-    #     """
-    #     Replicate a single volume.
+    def _replicate_volume(self, schema_name: str, volume_name: str) -> List[RunResult]:
+        """
+        Replicate a single volume.
 
-    #     Args:
-    #         schema_name: Schema name
-    #         volume_name: Volume name to replicate
+        Args:
+            schema_name: Schema name
+            volume_name: Volume name to replicate
 
-    #     Returns:
-    #         RunResult object for the replication operation
-    #     """
-    #     return None  # Implementation of volume replication logic goes here
+        Returns:
+            RunResult object for the replication operation
+        """
+        start_time = datetime.now(timezone.utc)
+        replication_config = self.catalog_config.replication_config
+        volume_config = replication_config.volume_config
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+        source_volume = f"`{source_catalog}`.`{schema_name}`.`{volume_name}`"
+        target_volume = f"`{target_catalog}`.`{schema_name}`.`{volume_name}`"
+        source_path = f"/Volumes/{source_catalog}/{schema_name}/{volume_name}/"
+        target_path = f"/Volumes/{target_catalog}/{schema_name}/{volume_name}/"
+        checkpoint_path = f"{target_path}_checkpoints/"
+
+        if volume_config.folder_path:
+            source_path = f"{source_path}/{volume_config.folder_path.strip('/')}/"
+            target_path = f"{target_path}/{volume_config.folder_path.strip('/')}/"
+            checkpoint_path = (
+                f"{checkpoint_path}{volume_config.folder_path.strip('/')}/"
+            )
+
+        # create detail ingestion logging catalog and schema if not exists
+        if volume_config.create_file_ingestion_logging_catalog:
+            self.db_ops.create_catalog_if_not_exists(
+                volume_config.file_ingestion_logging_catalog,
+                volume_config.file_ingestion_logging_catalog_location,
+            )
+
+        self.db_ops.create_schema_if_not_exists(
+            volume_config.file_ingestion_logging_catalog,
+            volume_config.file_ingestion_logging_schema,
+        )
+        detail_ingestion_logging_table = f"`{volume_config.file_ingestion_logging_catalog}`.`{volume_config.file_ingestion_logging_schema}`.`{volume_config.file_ingestion_logging_table}`"
+
+        # Extract variables that will be used in the foreachBatch function to avoid serialization issues
+        run_id = self.run_id
+        self.logger.info(
+            f"Creating detail ingestion logging table: {detail_ingestion_logging_table}"
+        )
+        # create detail ingestion logging table if not exists
+        self.spark.sql(f"""
+            create table if not exists {detail_ingestion_logging_table} (
+            run_id string,
+            source_path String,
+            target_path string,
+            ingestion_time timestamp,
+            length bigint,
+            file_modification_time timestamp,
+            status string,
+            error_msg string,
+            batch_id string
+        )
+        """)
+        self.logger.info(
+            f"File ingestion details are logged in: {detail_ingestion_logging_table}"
+        )
+
+        attempt = 1
+        max_attempts = self.retry.max_attempts
+        volume_type = None
+        error_count = 0
+
+        details = {
+            "source_path": source_path,
+            "target_path": target_path,
+            "checkpoint_path": checkpoint_path,
+            "delete_and_reload": volume_config.delete_and_reload,
+            "error_count": error_count,
+        }
+        try:
+            # Check if source table exists
+            if not self.db_ops.if_volume_exists(source_volume):
+                raise TableNotFoundError(
+                    f"Source volume does not exist: {source_volume}"
+                )
+
+            # Get volume type
+            volume_type = self.db_ops.get_volume_type(source_volume)
+            details["volume_type"] = volume_type
+
+            self.logger.info(
+                f"Starting replication: {source_path} -> {target_path}",
+                extra={"run_id": self.run_id, "operation": "replication"},
+            )
+
+            if volume_config.delete_and_reload:
+                try:
+                    self.logger.info(f"Deleting target directory: {target_path}")
+                    self.target_workspace_client.dbutils.fs.rm(target_path, True)
+                    self.logger.info(f"Directory {target_path} removed successfully")
+                except FileNotFoundError:
+                    self.logger.warning(f"Directory does not exist: {target_path}")
+                except PermissionError:
+                    self.logger.error(
+                        f"Permission denied when trying to remove directory: {target_path}"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"An error occurred when trying to remove directory: {target_path}: {str(e)}"
+                    )
+            if volume_config.delete_checkpoint:
+                try:
+                    self.logger.info(
+                        f"Deleting checkpoint directory: {checkpoint_path}"
+                    )
+                    self.target_workspace_client.dbutils.fs.rm(checkpoint_path, True)
+                    self.logger.info(
+                        f"Directory {checkpoint_path} removed successfully"
+                    )
+                except FileNotFoundError:
+                    self.logger.warning(f"Directory does not exist: {checkpoint_path}")
+                except PermissionError:
+                    self.logger.error(
+                        f"Permission denied when trying to remove directory: {checkpoint_path}"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"An error occurred when trying to remove directory: {checkpoint_path}: {str(e)}"
+                    )
+
+            if volume_config.streaming_timeout_seconds:
+                self.spark.conf.set(
+                    "spark.databricks.execution.timeout",
+                    volume_config.streaming_timeout_seconds,
+                )
+
+            read_options_always = {
+                "cloudFiles.format": "binaryFile",
+            }
+
+            if volume_config.autoloader_options:
+                read_options = volume_config.autoloader_options.update(
+                    read_options_always
+                )
+            else:
+                read_options = read_options_always
+
+            # Use custom retry decorator with logging
+            @retry_with_logging(self.retry, self.logger)
+            def replication_operation(
+                source_path: str,
+                target_path: str,
+                run_id: str,
+                checkpoint_path: str,
+                logging_table: str,
+                max_workers: int,
+            ):
+                try:
+                    df = (
+                        self.spark.readStream.format("cloudFiles")
+                        .options(**read_options)
+                        .load(source_path)
+                        .select("path", "length", "modificationTime")
+                    )
+
+                    def copy_files(batch_df, batch_id):
+                        import os
+                        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                        def process_file(file_row):
+                            try:
+                                result = 0
+                                error_msg = ""
+                                status = "success"
+                                src_file_path = file_row["path"]
+                                if src_file_path.startswith("dbfs:"):
+                                    src_file_path = src_file_path.replace(
+                                        "dbfs:", "", 1
+                                    )
+
+                                rel_path = src_file_path.replace(
+                                    source_path, "", 1
+                                ).lstrip("/")
+                                dst_file_path = target_path + rel_path
+
+                                dst_dir = "/".join(dst_file_path.split("/")[:-1])
+                                os.makedirs(dst_dir, exist_ok=True)
+
+                                cmd = f'cp "{src_file_path}" "{dst_file_path}"'
+                                result = os.system(cmd)
+                                if result != 0:
+                                    status = "error"
+                                    error_msg = f"Copy failed with exit code {result}"
+
+                            except Exception as e:
+                                status = "error"
+                                error_msg = str(e).replace("'", "''")
+
+                            return (
+                                src_file_path,
+                                dst_file_path,
+                                status,
+                                error_msg,
+                                file_row["length"],
+                                file_row["modificationTime"],
+                            )
+
+                        # Use threading to process files
+                        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                            futures = [
+                                executor.submit(process_file, row)
+                                for row in batch_df.collect()
+                            ]
+
+                            for future in as_completed(futures):
+                                try:
+                                    (
+                                        src_file,
+                                        dst_file,
+                                        status,
+                                        error,
+                                        length,
+                                        mod_time,
+                                    ) = future.result()
+
+                                    # Log each result
+                                    sql = f"""INSERT INTO {logging_table}
+                                        VALUES ('{run_id}', '{src_file}', '{dst_file}',
+                                               current_timestamp, {length}, '{mod_time}',
+                                               '{status}', '{error}', '{batch_id}')"""
+                                    batch_df.sparkSession.sql(sql)
+                                except Exception:
+                                    pass
+
+                    query = (
+                        df.writeStream.foreachBatch(copy_files)
+                        .option("checkpointLocation", checkpoint_path)
+                        .trigger(availableNow=True)
+                        .start()
+                    )
+                except Exception as e:
+                    raise ReplicationError(
+                        f"Volume replication failed: {str(e)}"
+                    ) from e
+
+                query_result = None
+                query_result = query.awaitTermination(
+                    volume_config.streaming_timeout_seconds
+                )
+                if not query_result:
+                    raise ReplicationError(
+                        f"Volume replication streaming query timed out after {volume_config.streaming_timeout_seconds} seconds"
+                    )
+                return True
+
+            # Direct replication
+            (
+                result,
+                last_exception,
+                attempt,
+                max_attempts,
+            ) = replication_operation(
+                source_path=source_path,
+                target_path=target_path,
+                run_id=run_id,
+                checkpoint_path=checkpoint_path,
+                logging_table=detail_ingestion_logging_table,
+                max_workers=volume_config.max_concurrent_copies,
+            )
+
+            end_time = datetime.now(timezone.utc)
+            duration = (end_time - start_time).total_seconds()
+
+            # get error count from detail ingestion logging table
+            details["error_count"] = (
+                self.spark.sql(
+                    f"select count(1) from {detail_ingestion_logging_table} where status = 'error' and run_id = '{self.run_id}'"
+                ).collect()[0][0]
+                or 0
+            )
+            details["total_count"] = (
+                self.spark.sql(
+                    f"select count(1) from {detail_ingestion_logging_table} where run_id = '{self.run_id}'"
+                ).collect()[0][0]
+                or 0
+            )
+
+            if result:
+                error_rate = (
+                    details['error_count'] / details['total_count']
+                    if details['total_count'] > 0 else 0
+                )
+                self.logger.info(
+                    f"Replication completed successfully: {source_path} -> {target_path} "
+                    f"(errors: {details['error_count']}/{details['total_count']}) "
+                    f"error_rate: {error_rate:.2%} "
+                    f"({duration:.2f}s)",
+                    extra={"run_id": self.run_id, "operation": "replication"},
+                )
+
+                return [
+                    RunResult(
+                        operation_type="replication",
+                        catalog_name=target_catalog,
+                        schema_name=schema_name,
+                        object_name=volume_name,
+                        object_type="volume",
+                        status="success",
+                        start_time=start_time.isoformat(),
+                        end_time=end_time.isoformat(),
+                        duration_seconds=duration,
+                        details=details,
+                        attempt_number=attempt,
+                        max_attempts=max_attempts,
+                    )
+                ]
+
+            error_msg = (
+                f"Replication failed after {max_attempts} attempts: "
+                f"{source_volume} -> {target_volume}"
+            )
+            if last_exception:
+                error_msg += f" | Last error: {str(last_exception)}"
+
+            self.logger.error(
+                error_msg,
+                extra={"run_id": self.run_id, "operation": "replication"},
+            )
+
+            return [
+                RunResult(
+                    operation_type="replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    volume_name=volume_name,
+                    status="failed",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    error_message=error_msg,
+                    details=details,
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+            ]
+
+        except Exception as e:
+            end_time = datetime.now(timezone.utc)
+            duration = (end_time - start_time).total_seconds()
+
+            # Wrap in ReplicationError for better error categorization
+            if not isinstance(e, ReplicationError):
+                e = ReplicationError(f"Replication operation failed: {str(e)}")
+
+            error_msg = f"Failed to replicate volume {source_volume}: {str(e)}"
+            self.logger.error(
+                error_msg,
+                extra={"run_id": self.run_id, "operation": "replication"},
+                exc_info=True,
+            )
+
+            return [
+                RunResult(
+                    operation_type="replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    volume_name=volume_name,
+                    status="failed",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    error_message=error_msg,
+                    details=details,
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+            ]
 
     def _build_external_volume_query(
         self, source_volume: str, target_volume: str

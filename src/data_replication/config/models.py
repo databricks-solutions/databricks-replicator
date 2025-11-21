@@ -201,6 +201,7 @@ class ReplicationConfig(BaseModel):
     overwrite_tags: Optional[bool] = True
     overwrite_comments: Optional[bool] = True
     copy_files: Optional[bool] = True
+    volume_config: Optional["VolumeFilesReplicationConfig"] = None
 
     @field_validator("source_catalog", "intermediate_catalog")
     @classmethod
@@ -299,6 +300,22 @@ class LoggingConfig(BaseModel):
         return v.lower()
 
 
+class VolumeFilesReplicationConfig(BaseModel):
+    """Configuration for volume files replication."""
+
+    max_concurrent_copies: int = Field(default=10, ge=1, le=100)
+    delete_and_reload: bool = False
+    delete_checkpoint: bool = False
+    folder_path: Optional[str] = None
+    autoloader_options: Optional[dict] = None
+    streaming_timeout_seconds: int = Field(default=43200, ge=60)
+    create_file_ingestion_logging_catalog: bool = False
+    file_ingestion_logging_catalog: Optional[str] = None
+    file_ingestion_logging_catalog_location: Optional[str] = None
+    file_ingestion_logging_schema: Optional[str] = None
+    file_ingestion_logging_table: Optional[str] = None
+
+
 class RetryConfig(BaseModel):
     """Configuration for retry settings."""
 
@@ -336,10 +353,18 @@ class ReplicationSystemConfig(BaseModel):
 
     @model_validator(mode="after")
     def set_table_types(self):
-        """Merge catalog-level table types into system-level config"""
+        """Merge catalog-level table types into system-level config and expand 'all' type"""
+        # Expand system-level table_types if it contains "all"
+        if self.table_types and TableType.ALL in self.table_types:
+            self.table_types = [TableType.MANAGED, TableType.EXTERNAL, TableType.STREAMING_TABLE]
+        
         for catalog in self.target_catalogs:
             if self.table_types is not None and catalog.table_types is None:
                 catalog.table_types = self.table_types
+            
+            # Expand catalog-level table_types if it contains "all"
+            if catalog.table_types and TableType.ALL in catalog.table_types:
+                catalog.table_types = [TableType.MANAGED, TableType.EXTERNAL, TableType.STREAMING_TABLE]
         return self
 
     @model_validator(mode="after")
@@ -387,6 +412,11 @@ class ReplicationSystemConfig(BaseModel):
     @model_validator(mode="after")
     def set_replication_defaults(self):
         """Merge catalog-level replication configs into system-level config"""
+        # Extract catalog and schema from audit_table
+        audit_parts = self.audit_config.audit_table.split(".")
+        audit_catalog = audit_parts[0]
+        audit_schema = audit_parts[1]
+
         for catalog in self.target_catalogs:
             if catalog.replication_config:
                 # Merge system-level config into catalog config (catalog takes precedence)
@@ -406,6 +436,17 @@ class ReplicationSystemConfig(BaseModel):
                     catalog.replication_config = ReplicationConfig(
                         **self.replication_config.model_dump()
                     )
+            if catalog.replication_config:
+                if (
+                    catalog.replication_config.volume_config.file_ingestion_logging_catalog
+                    is None
+                ):
+                    catalog.replication_config.volume_config.file_ingestion_logging_catalog = audit_catalog
+                if (
+                    catalog.replication_config.volume_config.file_ingestion_logging_schema
+                    is None
+                ):
+                    catalog.replication_config.volume_config.file_ingestion_logging_schema = audit_schema
 
         return self
 

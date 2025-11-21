@@ -11,26 +11,25 @@ This system provides incremental data and UC metadata replication capabilities b
 ## Supported Object Types
 - Data Replication
   - Streaming Tables (data only, no checkpoints)
-  - Managed Table
-  - External Table
+  - Managed Tables
+  - External Tables
+  - Volume Files
 - UC metadata
   - Tags (catalog, schema, table, columns, views, volume)
   - Column Comments
   
 ## WIP
-- Data Replication
-  - Volume Files
 - UC metadata
   - Storage Credentials
-  - External Location
-  - Catalog
-  - Schema
+  - External Locations
+  - Catalogs
+  - Schemas
   - Views
-  - Volume
+  - Volumes
   - Permissions
+  - Materialized Views
 
 ## Unsupported Object Types
-- Materialized Views
 - Streaming checkpoints
 
 ## Supported Operation Types
