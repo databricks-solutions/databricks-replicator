@@ -70,6 +70,12 @@ class ReplicationProvider(BaseProvider):
                 self.source_spark, get_workspace_url_from_host(source_host)
             )
             self.source_dbops = DatabricksOperations(self.source_spark, self.logger)
+            self.source_workspace_client = create_workspace_client(
+                host=self.source_databricks_config.host,
+                secret_config=self.source_databricks_config.token,
+                workspace_client=self.workspace_client,
+                auth_type=self.source_databricks_config.auth_type,
+            )            
 
         # for uc replication, set default driving spark to source spark and dbops to source dbops. Create separate target spark and dbops.
         if (

@@ -40,7 +40,6 @@ replication_config:
   enabled: true
   create_target_catalog: true
   create_shared_catalog: true
-  replicate_as_managed: true
 reconciliation_config:
   enabled: true
   create_shared_catalog: true

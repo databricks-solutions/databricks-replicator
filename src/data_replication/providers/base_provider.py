@@ -91,6 +91,8 @@ class BaseProvider(ABC):
         self.source_dbops = None
         self.target_spark = None
         self.target_dbops = None
+        self.source_workspace_client = None
+        self.target_workspace_client = None
 
     @abstractmethod
     def setup_operation_catalogs(self):
@@ -213,7 +215,6 @@ class BaseProvider(ABC):
 
         results = []
         start_time = datetime.now(timezone.utc)
-        catalog_run_result = []
 
         try:
             # Setup operation-specific catalogs (implemented by subclasses)
@@ -231,6 +232,23 @@ class BaseProvider(ABC):
                 },
             )
 
+            # Replicate catalog if configured
+            if self.catalog_config.uc_object_types and (
+                UCObjectType.CATALOG in self.catalog_config.uc_object_types
+                or UCObjectType.ALL in self.catalog_config.uc_object_types
+            ):
+                run_result = self._replicate_catalog()
+                results.extend(run_result)
+                catalog_run_result = []
+                if run_result:
+                    catalog_run_result.extend(run_result)
+                    self.audit_logger.log_results(catalog_run_result)
+                if UCObjectType.ALL not in self.catalog_config.uc_object_types:
+                    uc_object_types_catalog_processed.remove(UCObjectType.CATALOG)
+                # immediately return if no other object types to process
+                if len(uc_object_types_catalog_processed) == 0:
+                    return results
+
             # Replicate catalog tags if configured
             if self.catalog_config.uc_object_types and (
                 UCObjectType.CATALOG_TAG in self.catalog_config.uc_object_types
@@ -238,6 +256,7 @@ class BaseProvider(ABC):
             ):
                 run_result = self._replicate_catalog_tags()
                 results.extend(run_result)
+                catalog_run_result = []
                 if run_result:
                     catalog_run_result.extend(run_result)
                     self.audit_logger.log_results(catalog_run_result)
@@ -336,9 +355,7 @@ class BaseProvider(ABC):
         results: List[RunResult] = []
         catalog_name = self.catalog_config.catalog_name
         start_time = datetime.now(timezone.utc)
-        self.logger.debug(
-            f"Processing with config: {self.catalog_config}"
-        )
+        self.logger.debug(f"Processing with config: {self.catalog_config}")
         try:
             total_objects = 0
             tables = []
@@ -698,7 +715,7 @@ class BaseProvider(ABC):
             schema_name,
             tables,
             self.catalog_config.table_types,
-            self.max_workers
+            self.max_workers,
         )
 
     def _get_volumes(
@@ -1148,4 +1165,267 @@ class BaseProvider(ABC):
         )
 
         run_results.append(run_result)
+        return run_results
+
+    def _replicate_catalog(self) -> List[RunResult]:
+        """
+        Replicate catalog from source to target using workspace client.
+        If storage location exists, uses external_location mapping to determine target path.
+
+        Returns:
+            List[RunResult]: Results for the catalog replication operation
+        """
+        start_time = datetime.now(timezone.utc)
+        run_results = []
+        replication_config = self.catalog_config.replication_config
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+
+        attempt = 1
+        max_attempts = self.retry.max_attempts
+        last_exception = None
+
+        try:
+            self.logger.info(
+                f"Starting catalog replication: {source_catalog} -> {target_catalog}",
+                extra={"run_id": self.run_id, "operation": "replication"},
+            )
+
+            # Get source catalog info using workspace client
+            try:
+                source_catalog_info = self.source_workspace_client.catalogs.get(
+                    source_catalog
+                )
+            except Exception as e:
+                raise ReplicationError(
+                    f"Failed to get source catalog {source_catalog}: {str(e)}"
+                ) from e
+
+            # Validate catalog type - only MANAGED_CATALOG is supported
+            catalog_type = getattr(source_catalog_info, "catalog_type", None)
+            if catalog_type and catalog_type.name != "MANAGED_CATALOG":
+                raise ReplicationError(
+                    f"Source catalog {source_catalog} has unsupported catalog type: {catalog_type.name}. "
+                    f"Only MANAGED_CATALOG type is supported for replication."
+                )
+
+            # Determine target storage root using external_location_mapping if applicable
+            target_storage_root = None
+            source_storage_root = getattr(source_catalog_info, "storage_root", None)
+            if source_storage_root:
+                if self.external_location_mapping:
+                    # Find matching source external location
+                    for (
+                        src_location,
+                        tgt_location,
+                    ) in self.external_location_mapping.items():
+                        if source_storage_root.startswith(src_location):
+                            # Calculate relative path and construct target location
+                            relative_path = source_storage_root[
+                                len(src_location) :
+                            ].lstrip("/")
+                            target_storage_root = (
+                                f"{tgt_location.rstrip('/')}/{relative_path}"
+                                if relative_path
+                                else tgt_location
+                            )
+                            break
+
+                    if target_storage_root is None:
+                        # Check if replicate_as_managed is enabled
+                        if getattr(replication_config, 'replicate_as_managed', False):
+                            self.logger.warning(
+                                f"No external location mapping found for source catalog storage root: {source_storage_root}. "
+                                f"Creating catalog as managed due to replicate_as_managed=true.",
+                                extra={"run_id": self.run_id, "operation": "replication"},
+                            )
+                        else:
+                            raise ReplicationError(
+                                f"No external location mapping found for source catalog storage root: {source_storage_root}. "
+                                f"Cannot replicate external catalog without proper mapping. "
+                                f"Set replicate_as_managed=true to create as managed catalog instead."
+                            )
+                else:
+                    # Check if replicate_as_managed is enabled when no mapping is configured
+                    if getattr(replication_config, 'replicate_as_managed', False):
+                        self.logger.warning(
+                            f"Source catalog {source_catalog} has storage root but external_location_mapping is not configured. "
+                            f"Creating catalog as managed due to replicate_as_managed=true.",
+                            extra={"run_id": self.run_id, "operation": "replication"},
+                        )
+                    else:
+                        raise ReplicationError(
+                            f"Source catalog {source_catalog} has storage root: {source_storage_root} "
+                            f"but external_location_mapping is not configured. "
+                            f"Cannot replicate external catalog without proper mapping. "
+                            f"Set replicate_as_managed=true to create as managed catalog instead."
+                        )
+
+            # Check if target catalog already exists
+            catalog_exists = False
+            target_catalog_info = None
+            try:
+                target_catalog_info = self.target_workspace_client.catalogs.get(
+                    target_catalog
+                )
+                catalog_exists = True
+                self.logger.info(
+                    f"Target catalog {target_catalog} already exists, will update properties",
+                    extra={"run_id": self.run_id, "operation": "replication"},
+                )
+            except Exception:
+                # Catalog doesn't exist, we'll create it
+                pass
+
+            if not catalog_exists:
+                # Create catalog using workspace client
+                try:
+                    _ = self.target_workspace_client.catalogs.create(
+                        name=target_catalog,
+                        comment=getattr(source_catalog_info, "comment", None),
+                        storage_root=target_storage_root,
+                        properties=getattr(source_catalog_info, "properties", None),
+                    )
+                    self.logger.info(
+                        f"Successfully created catalog: {target_catalog}"
+                        + (
+                            f" with storage root: {target_storage_root}"
+                            if target_storage_root
+                            else " as managed"
+                        ),
+                        extra={"run_id": self.run_id, "operation": "replication"},
+                    )
+                except Exception as e:
+                    raise ReplicationError(
+                        f"Failed to create catalog {target_catalog}: {str(e)}"
+                    ) from e
+            else:
+                # Update existing catalog properties
+                # Determine what needs to be updated
+                updates_needed = []
+                update_kwargs = {"name": target_catalog}
+
+                # Check comment
+                source_comment = getattr(source_catalog_info, "comment", None)
+                target_comment = getattr(target_catalog_info, "comment", None)
+                if source_comment != target_comment:
+                    update_kwargs["comment"] = source_comment
+                    updates_needed.append(
+                        f"comment: '{target_comment}' -> '{source_comment}'"
+                    )
+
+                # Check properties
+                source_props = getattr(source_catalog_info, "properties", {}) or {}
+                target_props = getattr(target_catalog_info, "properties", {}) or {}
+
+                if source_props != target_props:
+                    update_kwargs["properties"] = source_props
+                    updates_needed.append("properties updated")
+
+                # Note: storage_root cannot be updated after catalog creation
+                target_storage_root_existing = getattr(
+                    target_catalog_info, "storage_root", None
+                )
+                if (
+                    source_storage_root
+                    and target_storage_root_existing
+                    and source_storage_root != target_storage_root_existing
+                ):
+                    self.logger.warning(
+                        f"Source catalog storage root ({source_storage_root}) differs from target "
+                        f"({target_storage_root_existing}), but storage root cannot be updated after creation",
+                        extra={"run_id": self.run_id, "operation": "replication"},
+                    )
+
+                if updates_needed:
+                    try:
+                        _ = self.target_workspace_client.catalogs.update(
+                            **update_kwargs
+                        )
+                        self.logger.info(
+                            f"Successfully updated catalog {target_catalog}: {', '.join(updates_needed)}",
+                            extra={"run_id": self.run_id, "operation": "replication"},
+                        )
+                    except Exception as e:
+                        raise ReplicationError(
+                            f"Failed to update catalog {target_catalog}: {str(e)}"
+                        ) from e
+                else:
+                    self.logger.info(
+                        f"Catalog {target_catalog} properties are already up to date",
+                        extra={"run_id": self.run_id, "operation": "replication"},
+                    )
+
+            end_time = datetime.now(timezone.utc)
+            duration = (end_time - start_time).total_seconds()
+
+            self.logger.info(
+                f"Catalog replication completed successfully: {source_catalog} -> {target_catalog} ({duration:.2f}s)",
+                extra={"run_id": self.run_id, "operation": "replication"},
+            )
+
+            run_results.append(
+                RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name=None,
+                    object_name=target_catalog,
+                    object_type="catalog",
+                    status="success",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    details={
+                        "source_catalog": source_catalog,
+                        "target_catalog": target_catalog,
+                        "source_storage_root": source_storage_root,
+                        "target_storage_root": target_storage_root,
+                        "catalog_existed": catalog_exists,
+                        "comment": getattr(source_catalog_info, "comment", None),
+                        "properties": getattr(source_catalog_info, "properties", None),
+                        "updates_needed": updates_needed if catalog_exists else None,
+                    },
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+            )
+
+        except Exception as e:
+            end_time = datetime.now(timezone.utc)
+            duration = (end_time - start_time).total_seconds()
+            last_exception = e
+
+            if not isinstance(e, ReplicationError):
+                e = ReplicationError(f"Catalog replication operation failed: {str(e)}")
+
+            error_msg = f"Failed to replicate catalog {source_catalog} -> {target_catalog}: {str(e)}"
+            self.logger.error(
+                error_msg,
+                extra={"run_id": self.run_id, "operation": "replication"},
+                exc_info=True,
+            )
+            if last_exception:
+                error_msg += f" | Last error: {str(last_exception)}"
+
+            run_results.append(
+                RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name=None,
+                    object_name=target_catalog,
+                    object_type="catalog",
+                    status="failed",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    error_message=error_msg,
+                    details={
+                        "source_catalog": source_catalog,
+                        "target_catalog": target_catalog,
+                    },
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+            )
+
         return run_results
