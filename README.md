@@ -162,8 +162,3 @@ data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --target-catal
 databricks bundle validate
 databricks bundle deploy
 ```
-
-
-## License
-
-This project is proprietary to Databricks.

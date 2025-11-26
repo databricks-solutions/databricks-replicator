@@ -355,3 +355,55 @@ def merge_models_recursive(
 
     # Create and return new model instance
     return base_model
+
+
+def map_external_location(
+    source_storage_root: str, external_location_mapping: dict
+) -> Optional[str]:
+    """
+    Map a source storage root to a target storage root using external location mapping.
+
+    Args:
+        source_storage_root: Source storage root path
+        external_location_mapping: Dictionary mapping source to target external locations
+
+    Returns:
+        Mapped target storage root path, or None if no mapping found
+    """
+    if not source_storage_root or not external_location_mapping:
+        return None
+
+    # Find matching source external location
+    for src_location, tgt_location in external_location_mapping.items():
+        if source_storage_root.startswith(src_location):
+            # Calculate relative path and construct target location
+            relative_path = source_storage_root[len(src_location) :].lstrip("/")
+            target_storage_root = (
+                f"{tgt_location.rstrip('/')}/{relative_path}"
+                if relative_path
+                else tgt_location
+            )
+            return target_storage_root
+
+    return None
+
+
+def map_user(source_user: str, user_mapping: dict) -> Optional[str]:
+    """
+    Map a source user to a target user using user mapping.
+
+    Args:
+        source_user: Source user name
+        user_mapping: Dictionary mapping source to target users
+
+    Returns:
+        Mapped target user name, or None if no mapping found
+    """
+    if not source_user or not user_mapping:
+        return source_user
+
+    # Find matching source external location
+    for src_user, tgt_user in user_mapping.items():
+        if src_user == source_user:
+            return tgt_user
+    return source_user

@@ -16,7 +16,12 @@ from databricks.connect import DatabricksSession
 from databricks.sdk import WorkspaceClient
 from pyspark.sql.utils import AnalysisException
 
-from data_replication.utils import filter_common_maps, retry_with_logging, merge_maps
+from data_replication.utils import (
+    filter_common_maps,
+    retry_with_logging,
+    merge_maps,
+    map_external_location,
+)
 
 from ..audit.audit_logger import AuditLogger
 from ..audit.logger import DataReplicationLogger
@@ -280,10 +285,28 @@ class BaseProvider(ABC):
                         "operation": self.get_operation_name(),
                     },
                 )
-                schema_run_result = []
+
                 uc_object_types_schema_processed = (
                     uc_object_types_catalog_processed.copy()
                 )
+
+                # Replicate schema if configured
+                if self.catalog_config.uc_object_types and (
+                    UCObjectType.SCHEMA in self.catalog_config.uc_object_types
+                    or UCObjectType.ALL in self.catalog_config.uc_object_types
+                ):
+                    run_result = self._replicate_schema(schema_name)
+                    results.extend(run_result)
+                    schema_run_result = []
+                    if run_result:
+                        schema_run_result.extend(run_result)
+                        self.audit_logger.log_results(schema_run_result)
+                    if UCObjectType.ALL not in self.catalog_config.uc_object_types:
+                        uc_object_types_schema_processed.remove(UCObjectType.SCHEMA)
+                    # continue to next schema if no other object types to process
+                    if len(uc_object_types_schema_processed) == 0:
+                        continue
+
                 # Replicate schema tags if configured
                 if self.catalog_config.uc_object_types and (
                     UCObjectType.SCHEMA_TAG in self.catalog_config.uc_object_types
@@ -291,6 +314,7 @@ class BaseProvider(ABC):
                 ):
                     run_result = self._replicate_schema_tags(schema_name)
                     results.extend(run_result)
+                    schema_run_result = []
                     if run_result:
                         schema_run_result.extend(run_result)
                         self.audit_logger.log_results(schema_run_result)
@@ -902,7 +926,7 @@ class BaseProvider(ABC):
 
             self.logger.info(
                 f"Starting {object_type} replication: {source_object} -> {target_object}",
-                extra={"run_id": self.run_id, "operation": "replication"},
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
             )
 
             attempt = 1
@@ -920,7 +944,7 @@ class BaseProvider(ABC):
                 self.logger.info(
                     f"No uncommon tags found for: {source_object} -> {target_object} "
                     f"Skipping tag replication for this {object_type}",
-                    extra={"run_id": self.run_id, "operation": "replication"},
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
                 )
                 end_time = datetime.now(timezone.utc)
                 duration = (end_time - start_time).total_seconds()
@@ -972,7 +996,7 @@ class BaseProvider(ABC):
                 self.logger.info(
                     f"{object_type} replication completed successfully: {source_object} -> {target_object} "
                     f"({duration:.2f}s)",
-                    extra={"run_id": self.run_id, "operation": "replication"},
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
                 )
 
                 return RunResult(
@@ -1013,7 +1037,7 @@ class BaseProvider(ABC):
 
         self.logger.error(
             error_msg,
-            extra={"run_id": self.run_id, "operation": "replication"},
+            extra={"run_id": self.run_id, "operation": "uc_replication"},
         )
 
         return RunResult(
@@ -1185,74 +1209,75 @@ class BaseProvider(ABC):
         max_attempts = self.retry.max_attempts
         last_exception = None
 
+        dict_for_creation = {
+            "name": None,
+            "comment": None,
+            "connection_name": None,
+            "options": None,
+            "properties": None,
+            "provider_name": None,
+            "share_name": None,
+            "storage_root": None,
+        }
+
+        dict_for_update = {
+            "name": None,
+            "comment": None,
+            "enable_predictive_optimization": None,
+            "isolation_mode": None,
+            # "new_name": None,
+            "options": None,
+            # "owner": None,
+            "properties": None,
+        }
+
         try:
             self.logger.info(
-                f"Starting catalog replication: {source_catalog} -> {target_catalog}",
-                extra={"run_id": self.run_id, "operation": "replication"},
+                f"Starting catalog metadata replication: {source_catalog} -> {target_catalog}",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
             )
 
-            # Get source catalog info using workspace client
-            try:
-                source_catalog_info = self.source_workspace_client.catalogs.get(
-                    source_catalog
-                )
-            except Exception as e:
-                raise ReplicationError(
-                    f"Failed to get source catalog {source_catalog}: {str(e)}"
-                ) from e
+            # Get source catalog info using source dbops
+            source_catalog_info = self.source_dbops.get_catalog(source_catalog)
 
-            # Validate catalog type - only MANAGED_CATALOG is supported
-            catalog_type = getattr(source_catalog_info, "catalog_type", None)
-            if catalog_type and catalog_type.name != "MANAGED_CATALOG":
-                raise ReplicationError(
-                    f"Source catalog {source_catalog} has unsupported catalog type: {catalog_type.name}. "
-                    f"Only MANAGED_CATALOG type is supported for replication."
-                )
+            dict_for_creation = {
+                k: v
+                for k, v in source_catalog_info.as_dict().items()
+                if k in dict_for_creation.keys()
+            }
+
+            dict_for_update = {
+                k: v
+                for k, v in source_catalog_info.as_dict().items()
+                if k in dict_for_update.keys()
+            }
 
             # Determine target storage root using external_location_mapping if applicable
             target_storage_root = None
             source_storage_root = getattr(source_catalog_info, "storage_root", None)
-            if source_storage_root:
-                if self.external_location_mapping:
-                    # Find matching source external location
-                    for (
-                        src_location,
-                        tgt_location,
-                    ) in self.external_location_mapping.items():
-                        if source_storage_root.startswith(src_location):
-                            # Calculate relative path and construct target location
-                            relative_path = source_storage_root[
-                                len(src_location) :
-                            ].lstrip("/")
-                            target_storage_root = (
-                                f"{tgt_location.rstrip('/')}/{relative_path}"
-                                if relative_path
-                                else tgt_location
-                            )
-                            break
+            # Check if replicate_as_managed is enabled
+            if getattr(replication_config, "replicate_as_managed", False):
+                self.logger.info(
+                    "Creating catalog as managed due to replicate_as_managed=true.",
+                    extra={
+                        "run_id": self.run_id,
+                        "operation": "uc_replication",
+                    },
+                )
+            else:
+                if source_storage_root:
+                    if self.external_location_mapping:
+                        # Map external location using utility function
+                        target_storage_root = map_external_location(
+                            source_storage_root, self.external_location_mapping
+                        )
 
-                    if target_storage_root is None:
-                        # Check if replicate_as_managed is enabled
-                        if getattr(replication_config, 'replicate_as_managed', False):
-                            self.logger.warning(
-                                f"No external location mapping found for source catalog storage root: {source_storage_root}. "
-                                f"Creating catalog as managed due to replicate_as_managed=true.",
-                                extra={"run_id": self.run_id, "operation": "replication"},
-                            )
-                        else:
+                        if target_storage_root is None:
                             raise ReplicationError(
                                 f"No external location mapping found for source catalog storage root: {source_storage_root}. "
                                 f"Cannot replicate external catalog without proper mapping. "
                                 f"Set replicate_as_managed=true to create as managed catalog instead."
                             )
-                else:
-                    # Check if replicate_as_managed is enabled when no mapping is configured
-                    if getattr(replication_config, 'replicate_as_managed', False):
-                        self.logger.warning(
-                            f"Source catalog {source_catalog} has storage root but external_location_mapping is not configured. "
-                            f"Creating catalog as managed due to replicate_as_managed=true.",
-                            extra={"run_id": self.run_id, "operation": "replication"},
-                        )
                     else:
                         raise ReplicationError(
                             f"Source catalog {source_catalog} has storage root: {source_storage_root} "
@@ -1261,17 +1286,17 @@ class BaseProvider(ABC):
                             f"Set replicate_as_managed=true to create as managed catalog instead."
                         )
 
+            dict_for_creation["storage_root"] = target_storage_root
+            dict_for_creation["name"] = target_catalog
             # Check if target catalog already exists
             catalog_exists = False
             target_catalog_info = None
             try:
-                target_catalog_info = self.target_workspace_client.catalogs.get(
-                    target_catalog
-                )
+                target_catalog_info = self.target_dbops.get_catalog(target_catalog)
                 catalog_exists = True
                 self.logger.info(
                     f"Target catalog {target_catalog} already exists, will update properties",
-                    extra={"run_id": self.run_id, "operation": "replication"},
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
                 )
             except Exception:
                 # Catalog doesn't exist, we'll create it
@@ -1279,89 +1304,24 @@ class BaseProvider(ABC):
 
             if not catalog_exists:
                 # Create catalog using workspace client
-                try:
-                    _ = self.target_workspace_client.catalogs.create(
-                        name=target_catalog,
-                        comment=getattr(source_catalog_info, "comment", None),
-                        storage_root=target_storage_root,
-                        properties=getattr(source_catalog_info, "properties", None),
-                    )
-                    self.logger.info(
-                        f"Successfully created catalog: {target_catalog}"
-                        + (
-                            f" with storage root: {target_storage_root}"
-                            if target_storage_root
-                            else " as managed"
-                        ),
-                        extra={"run_id": self.run_id, "operation": "replication"},
-                    )
-                except Exception as e:
-                    raise ReplicationError(
-                        f"Failed to create catalog {target_catalog}: {str(e)}"
-                    ) from e
+                _ = self.target_dbops.create_catalog(dict_for_creation)
             else:
-                # Update existing catalog properties
-                # Determine what needs to be updated
-                updates_needed = []
-                update_kwargs = {"name": target_catalog}
+                dict_for_update_target = {
+                    k: v
+                    for k, v in target_catalog_info.as_dict().items()
+                    if k in dict_for_update.keys()
+                }
+                dict_for_update["name"] = target_catalog
 
-                # Check comment
-                source_comment = getattr(source_catalog_info, "comment", None)
-                target_comment = getattr(target_catalog_info, "comment", None)
-                if source_comment != target_comment:
-                    update_kwargs["comment"] = source_comment
-                    updates_needed.append(
-                        f"comment: '{target_comment}' -> '{source_comment}'"
-                    )
-
-                # Check properties
-                source_props = getattr(source_catalog_info, "properties", {}) or {}
-                target_props = getattr(target_catalog_info, "properties", {}) or {}
-
-                if source_props != target_props:
-                    update_kwargs["properties"] = source_props
-                    updates_needed.append("properties updated")
-
-                # Note: storage_root cannot be updated after catalog creation
-                target_storage_root_existing = getattr(
-                    target_catalog_info, "storage_root", None
-                )
-                if (
-                    source_storage_root
-                    and target_storage_root_existing
-                    and source_storage_root != target_storage_root_existing
-                ):
-                    self.logger.warning(
-                        f"Source catalog storage root ({source_storage_root}) differs from target "
-                        f"({target_storage_root_existing}), but storage root cannot be updated after creation",
-                        extra={"run_id": self.run_id, "operation": "replication"},
-                    )
-
-                if updates_needed:
-                    try:
-                        _ = self.target_workspace_client.catalogs.update(
-                            **update_kwargs
-                        )
-                        self.logger.info(
-                            f"Successfully updated catalog {target_catalog}: {', '.join(updates_needed)}",
-                            extra={"run_id": self.run_id, "operation": "replication"},
-                        )
-                    except Exception as e:
-                        raise ReplicationError(
-                            f"Failed to update catalog {target_catalog}: {str(e)}"
-                        ) from e
-                else:
-                    self.logger.info(
-                        f"Catalog {target_catalog} properties are already up to date",
-                        extra={"run_id": self.run_id, "operation": "replication"},
-                    )
+                if dict_for_update != dict_for_update_target:
+                    _ = self.target_dbops.update_catalog(dict_for_update)
 
             end_time = datetime.now(timezone.utc)
             duration = (end_time - start_time).total_seconds()
 
             self.logger.info(
-                f"Catalog replication completed successfully: {source_catalog} -> {target_catalog} ({duration:.2f}s)",
-                extra={"run_id": self.run_id, "operation": "replication"},
+                f"Catalog metadata replication completed successfully: {source_catalog} -> {target_catalog} ({duration:.2f}s)",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
             )
 
             run_results.append(
@@ -1381,9 +1341,6 @@ class BaseProvider(ABC):
                         "source_storage_root": source_storage_root,
                         "target_storage_root": target_storage_root,
                         "catalog_existed": catalog_exists,
-                        "comment": getattr(source_catalog_info, "comment", None),
-                        "properties": getattr(source_catalog_info, "properties", None),
-                        "updates_needed": updates_needed if catalog_exists else None,
                     },
                     attempt_number=attempt,
                     max_attempts=max_attempts,
@@ -1396,12 +1353,14 @@ class BaseProvider(ABC):
             last_exception = e
 
             if not isinstance(e, ReplicationError):
-                e = ReplicationError(f"Catalog replication operation failed: {str(e)}")
+                e = ReplicationError(
+                    f"Catalog metadata replication operation failed: {str(e)}"
+                )
 
-            error_msg = f"Failed to replicate catalog {source_catalog} -> {target_catalog}: {str(e)}"
+            error_msg = f"Failed to replicate catalog metadata {source_catalog} -> {target_catalog}: {str(e)}"
             self.logger.error(
                 error_msg,
-                extra={"run_id": self.run_id, "operation": "replication"},
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
                 exc_info=True,
             )
             if last_exception:
@@ -1422,6 +1381,209 @@ class BaseProvider(ABC):
                     details={
                         "source_catalog": source_catalog,
                         "target_catalog": target_catalog,
+                    },
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+            )
+
+        return run_results
+
+    def _replicate_schema(self, schema_name: str) -> List[RunResult]:
+        """
+        Replicate schema from source to target using workspace client.
+
+        Args:
+            schema_name: Name of the schema to replicate
+
+        Returns:
+            List[RunResult]: Results for the schema replication operation
+        """
+        start_time = datetime.now(timezone.utc)
+        run_results = []
+        replication_config = self.catalog_config.replication_config
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+        source_schema_full_name = f"{source_catalog}.{schema_name}"
+        target_schema_full_name = f"{target_catalog}.{schema_name}"
+
+        attempt = 1
+        max_attempts = self.retry.max_attempts
+        last_exception = None
+
+        dict_for_creation = {
+            "catalog_name": target_catalog,
+            "name": schema_name,
+            "comment": None,
+            "properties": None,
+            "storage_root": None,
+        }
+
+        dict_for_update = {
+            "full_name": target_schema_full_name,
+            "comment": None,
+            "enable_predictive_optimization": None,
+            # "new_name": None,
+            # "owner": None,
+            "properties": None,
+        }
+
+        try:
+            self.logger.info(
+                f"Starting schema metadata replication: {source_schema_full_name} -> {target_schema_full_name}",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
+
+            # Get source schema info using source dbops
+            source_schema_info = self.source_dbops.get_schema(source_schema_full_name)
+
+            dict_for_creation = {
+                k: v
+                for k, v in source_schema_info.as_dict().items()
+                if k in dict_for_creation.keys()
+            }
+            # Ensure catalog_name and name are set correctly for target
+            dict_for_creation["catalog_name"] = target_catalog
+            dict_for_creation["name"] = schema_name
+
+            dict_for_update = {
+                k: v
+                for k, v in source_schema_info.as_dict().items()
+                if k in dict_for_update.keys()
+            }
+            # Ensure full_name is set correctly for target
+            dict_for_update["full_name"] = target_schema_full_name
+
+            # Determine target storage root using external_location_mapping if applicable
+            target_storage_root = None
+            source_storage_root = getattr(source_schema_info, "storage_root", None)
+            # Check if replicate_as_managed is enabled
+            if getattr(replication_config, "replicate_as_managed", False):
+                self.logger.info(
+                    "Creating schema as managed due to replicate_as_managed=true.",
+                    extra={
+                        "run_id": self.run_id,
+                        "operation": "uc_replication",
+                    },
+                )
+            else:
+                if source_storage_root:
+                    if self.external_location_mapping:
+                        # Map external location using utility function
+                        target_storage_root = map_external_location(
+                            source_storage_root, self.external_location_mapping
+                        )
+
+                        if target_storage_root is None:
+                            raise ReplicationError(
+                                f"No external location mapping found for source schema storage root: {source_storage_root}. "
+                                f"Cannot replicate external schema without proper mapping. "
+                                f"Set replicate_as_managed=true to create as managed schema instead."
+                            )
+                    else:
+                        raise ReplicationError(
+                            f"Source schema {source_schema_full_name} has storage root: {source_storage_root} "
+                            f"but external_location_mapping is not configured. "
+                            f"Cannot replicate external schema without proper mapping. "
+                            f"Set replicate_as_managed=true to create as managed schema instead."
+                        )
+
+            dict_for_creation["storage_root"] = target_storage_root
+
+            # Check if target schema already exists
+            schema_exists = False
+            target_schema_info = None
+            try:
+                target_schema_info = self.target_dbops.get_schema(
+                    target_schema_full_name
+                )
+                schema_exists = True
+                self.logger.info(
+                    f"Target schema {target_schema_full_name} already exists, will update properties",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+            except Exception:
+                # Schema doesn't exist, we'll create it
+                pass
+
+            if not schema_exists:
+                # Create schema using workspace client
+                _ = self.target_dbops.create_schema(dict_for_creation)
+            else:
+                dict_for_update_target = {
+                    k: v
+                    for k, v in target_schema_info.as_dict().items()
+                    if k in dict_for_update.keys()
+                }
+
+                if dict_for_update != dict_for_update_target:
+                    _ = self.target_dbops.update_schema(dict_for_update)
+
+            end_time = datetime.now(timezone.utc)
+            duration = (end_time - start_time).total_seconds()
+
+            self.logger.info(
+                f"Schema metadata replication completed successfully: {source_schema_full_name} -> {target_schema_full_name} ({duration:.2f}s)",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
+
+            run_results.append(
+                RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    object_name=schema_name,
+                    object_type="schema",
+                    status="success",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    details={
+                        "source_schema": source_schema_full_name,
+                        "target_schema": target_schema_full_name,
+                        "source_storage_root": source_storage_root,
+                        "target_storage_root": target_storage_root,
+                        "schema_existed": schema_exists,
+                    },
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+            )
+
+        except Exception as e:
+            end_time = datetime.now(timezone.utc)
+            duration = (end_time - start_time).total_seconds()
+            last_exception = e
+
+            if not isinstance(e, ReplicationError):
+                e = ReplicationError(
+                    f"Schema metadata replication operation failed: {str(e)}"
+                )
+
+            error_msg = f"Failed to replicate schema metadata {source_schema_full_name} -> {target_schema_full_name}: {str(e)}"
+            self.logger.error(
+                error_msg,
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+                exc_info=True,
+            )
+            if last_exception:
+                error_msg += f" | Last error: {str(last_exception)}"
+
+            run_results.append(
+                RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    object_name=schema_name,
+                    object_type="schema",
+                    status="failed",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    error_message=error_msg,
+                    details={
+                        "source_schema": source_schema_full_name,
+                        "target_schema": target_schema_full_name,
                     },
                     attempt_number=attempt,
                     max_attempts=max_attempts,

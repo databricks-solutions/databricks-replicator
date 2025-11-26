@@ -22,6 +22,7 @@ from ..exceptions import ReplicationError, TableNotFoundError
 from ..utils import (
     filter_common_maps,
     get_workspace_url_from_host,
+    map_external_location,
     merge_maps,
     retry_with_logging,
     create_spark_session,
@@ -69,13 +70,15 @@ class ReplicationProvider(BaseProvider):
             validate_spark_session(
                 self.source_spark, get_workspace_url_from_host(source_host)
             )
-            self.source_dbops = DatabricksOperations(self.source_spark, self.logger)
             self.source_workspace_client = create_workspace_client(
                 host=self.source_databricks_config.host,
                 secret_config=self.source_databricks_config.token,
                 workspace_client=self.workspace_client,
                 auth_type=self.source_databricks_config.auth_type,
-            )            
+            )
+            self.source_dbops = DatabricksOperations(
+                self.source_spark, self.logger, self.source_workspace_client
+            )
 
         # for uc replication, set default driving spark to source spark and dbops to source dbops. Create separate target spark and dbops.
         if (
@@ -84,7 +87,9 @@ class ReplicationProvider(BaseProvider):
         ):
             # set target spark and dbops to current spark and dbops
             self.target_spark = self.spark
-            self.target_dbops = self.db_ops
+            self.target_dbops = DatabricksOperations(
+                self.target_spark, self.logger, self.target_workspace_client
+            )
             self.spark = self.source_spark
             self.db_ops = self.source_dbops
 
@@ -905,28 +910,15 @@ class ReplicationProvider(BaseProvider):
                 "external_location_mapping is required for external volume replication"
             )
 
-        # Find matching source external location
-        source_external_location = None
-        target_external_location = None
+        # Map external location using utility function
+        target_location = map_external_location(
+            source_location, self.external_location_mapping
+        )
 
-        for src_location, tgt_location in self.external_location_mapping.items():
-            if source_location.startswith(src_location):
-                source_external_location = src_location
-                target_external_location = tgt_location
-                break
-
-        if not source_external_location:
+        if not target_location:
             raise ReplicationError(
                 f"No external location mapping found for source volume location: {source_location}"
             )
-
-        # Construct target location
-        relative_path = source_location[len(source_external_location) :].lstrip("/")
-        target_location = (
-            f"{target_external_location.rstrip('/')}/{relative_path}"
-            if relative_path
-            else target_external_location
-        )
 
         return (
             f"CREATE VOLUME IF NOT EXISTS {target_volume} LOCATION '{target_location}'"
@@ -1025,31 +1017,15 @@ class ReplicationProvider(BaseProvider):
                 "external_location_mapping is required for external table replication"
             )
 
-        # Find matching source external location
-        source_external_location = None
-        target_external_location = None
+        # Step 3: Map external location using utility function
+        target_location = map_external_location(
+            source_location, self.external_location_mapping
+        )
 
-        for (
-            src_location,
-            tgt_location,
-        ) in self.external_location_mapping.items():
-            if source_location.startswith(src_location):
-                source_external_location = src_location
-                target_external_location = tgt_location
-                break
-
-        if not source_external_location:
+        if not target_location:
             raise ReplicationError(
                 f"No external location mapping found for source location: {source_location}"
             )
-
-        # Step 3: Construct target storage location
-        relative_path = source_location[len(source_external_location) :].lstrip("/")
-        target_location = (
-            f"{target_external_location.rstrip('/')}/{relative_path}"
-            if relative_path
-            else target_external_location
-        )
 
         self.logger.debug(
             f"External table replication: {source_table} -> {target_location}",

@@ -66,7 +66,7 @@ uc_object_types: [
     "all",
     "catalog",
     "catalog_tag",
-    # "schema",
+    "schema",
     "schema_tag",
     "view_tag",
     # "volume",
@@ -145,7 +145,7 @@ replication_config:
   # Optional: whether to overwrite comments during replication. default is true.
   overwrite_comments: true
   # Optional: whether to replicate external tables as managed tables on target. default is false.
-    : false
+  replicate_as_managed: false
   # Optional: whether to copy data during external table replication. default is true.
   copy_files: true
   # Optional:  configuration for volume files replication
