@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 
 from data_replication.databricks_operations import DatabricksOperations
 
-from ..config.models import RunResult
+from ..config.models import RunResult, SchemaConfig, TableConfig
 from ..exceptions import ReconciliationError, TableNotFoundError
 from ..utils import (
     create_spark_session,
@@ -99,10 +99,11 @@ class ReconciliationProvider(BaseProvider):
         return reconciliation_config.source_catalog
 
     def process_schema_concurrently(
-        self, schema_name: str, table_list: List, volume_list: List = None
+        self,
+        schema_config: SchemaConfig,
     ) -> List[RunResult]:
         """Override to add reconciliation-specific schema setup."""
-        reconciliation_config = self.catalog_config.reconciliation_config
+        reconciliation_config = schema_config.reconciliation_config
 
         # Ensure reconciliation_results schema exists for consolidated tables
         self.db_ops.create_schema_if_not_exists(
@@ -110,12 +111,14 @@ class ReconciliationProvider(BaseProvider):
             reconciliation_config.recon_outputs_schema,
         )
 
-        return super().process_schema_concurrently(schema_name, table_list, volume_list)
+        return super().process_schema_concurrently(schema_config)
 
-    def process_table(self, schema_name: str, table_name: str) -> List[RunResult]:
+    def process_table(
+        self, schema_config: SchemaConfig, table_config: TableConfig
+    ) -> List[RunResult]:
         """Process a single table for reconciliation."""
         results = []
-        result = self._reconcile_table(schema_name, table_name)
+        result = self._reconcile_table(schema_config, table_config)
         if result:
             results.append(result)
             self.audit_logger.log_results(results)
@@ -123,21 +126,23 @@ class ReconciliationProvider(BaseProvider):
 
     def _reconcile_table(
         self,
-        schema_name: str,
-        table_name: str,
+        schema_config: SchemaConfig,
+        table_config: TableConfig,
     ) -> RunResult:
         """
         Reconcile a single table between source and target.
 
         Args:
             schema_name: Schema name
-            table_name: Table name to reconcile
+            table_config: TableConfig object for the table to reconcile
 
         Returns:
             RunResult object for the reconciliation operation
         """
         start_time = datetime.now(timezone.utc)
-        reconciliation_config = self.catalog_config.reconciliation_config
+        table_name = table_config.table_name
+        schema_name = schema_config.schema_name
+        reconciliation_config = table_config.reconciliation_config
         source_catalog = reconciliation_config.source_catalog
         target_catalog = self.catalog_config.catalog_name
         source_table = f"{source_catalog}.{schema_name}.{table_name}"
@@ -190,6 +195,7 @@ class ReconciliationProvider(BaseProvider):
                     source_table,
                     target_table,
                     reconciliation_operation,
+                    reconciliation_config,
                 )
                 schema_end_time = datetime.now(timezone.utc)
                 schema_duration = (schema_end_time - schema_start_time).total_seconds()
@@ -229,6 +235,7 @@ class ReconciliationProvider(BaseProvider):
                     source_table,
                     target_table,
                     reconciliation_operation,
+                    reconciliation_config,
                 )
                 row_count_end_time = datetime.now(timezone.utc)
                 row_count_duration = (
@@ -277,6 +284,7 @@ class ReconciliationProvider(BaseProvider):
                     source_table,
                     target_table,
                     reconciliation_operation,
+                    reconciliation_config,
                 )
                 missing_data_end_time = datetime.now(timezone.utc)
                 missing_data_duration = (
@@ -459,11 +467,11 @@ class ReconciliationProvider(BaseProvider):
         source_table: str,
         target_table: str,
         reconciliation_operation,
+        reconciliation_config,
     ) -> Dict[str, Any]:
         """Perform schema comparison between source and target tables."""
         try:
             # Use consolidated schema comparison table
-            reconciliation_config = self.catalog_config.reconciliation_config
             schema_comparison_table = f"{reconciliation_config.recon_outputs_catalog}.{reconciliation_config.recon_outputs_schema}.recon_schema_comparison"
 
             source_catalog = source_table.split(".")[0]
@@ -632,11 +640,10 @@ class ReconciliationProvider(BaseProvider):
         source_table: str,
         target_table: str,
         reconciliation_operation,
+        reconciliation_config,
     ) -> Dict[str, Any]:
         """Perform row count comparison between source and target tables."""
         try:
-            reconciliation_config = self.catalog_config.reconciliation_config
-
             # Get filtered table references
             source_table_ref = self._get_filtered_table_reference(source_table, True)
             target_table_ref = self._get_filtered_table_reference(target_table, False)
@@ -700,11 +707,11 @@ class ReconciliationProvider(BaseProvider):
         source_table: str,
         target_table: str,
         reconciliation_operation,
+        reconciliation_config,
     ) -> Dict[str, Any]:
         """Perform missing data check between source and target tables."""
         try:
             # Use consolidated missing data comparison table
-            reconciliation_config = self.catalog_config.reconciliation_config
             missing_data_table = f"{reconciliation_config.recon_outputs_catalog}.{reconciliation_config.recon_outputs_schema}.recon_missing_data_comparison"
 
             source_catalog = source_table.split(".")[0]

@@ -14,13 +14,9 @@ from pydantic import ValidationError
 
 from data_replication.config.models import (
     ReplicationSystemConfig,
-    SchemaConfig,
     ConcurrencyConfig,
     LoggingConfig,
-    TableConfig,
     TargetCatalogConfig,
-    VolumeConfig,
-    VolumeFilesReplicationConfig,
 )
 from data_replication.utils import merge_dicts_recursive
 
@@ -221,58 +217,40 @@ class ConfigLoader:
                         )
 
                 # Create schema configs
-                validated_schemas = []
+                schemas = []
                 for schema_name in schema_names:
                     # Handle target_tables override
-                    validated_tables = []
                     filter_expression = None
-
+                    schema = {}
+                    schema["schema_name"] = schema_name
                     if target_tables_override:
                         # Parse comma-separated table names
                         table_names = [
-                            name.strip().lower()
+                            {"table_name": name.strip().lower()}
                             for name in target_tables_override.split(",")
                         ]
+                        schema["tables"] = table_names
 
-                        for table_name in table_names:
-                            if table_name:
-                                validated_tables.append(
-                                    TableConfig(table_name=table_name)
-                                )
                     elif table_filter_expression_override:
                         # Use table filter expression instead of explicit tables
                         filter_expression = table_filter_expression_override
+                        schema["table_filter_expression"] = filter_expression
 
                     # Handle target_volumes override
-                    validated_volumes = []
                     if target_volumes_override:
                         # Parse comma-separated volume names
                         volume_names = [
-                            name.strip().lower()
+                            {"volume_name": name.strip().lower()}
                             for name in target_volumes_override.split(",")
                         ]
+                        schema["volumes"] = volume_names
 
-                        for volume_name in volume_names:
-                            if volume_name:
-                                validated_volumes.append(
-                                    VolumeConfig(volume_name=volume_name)
-                                )
-
-                    validated_schemas.append(
-                        SchemaConfig(
-                            schema_name=schema_name,
-                            tables=validated_tables,
-                            volumes=validated_volumes,
-                            table_filter_expression=filter_expression,
-                        )
-                    )
+                    schemas.append(schema)
 
                 # Apply override to all target catalogs
                 if "target_catalogs" in config_data:
                     for catalog in config_data["target_catalogs"]:
-                        catalog["target_schemas"] = [
-                            schema.model_dump() for schema in validated_schemas
-                        ]
+                        catalog["target_schemas"] = schemas
 
             except ValidationError as e:
                 raise ConfigurationError(
@@ -386,25 +364,35 @@ class ConfigLoader:
 
         # Handle volume configuration overrides
         volume_overrides = {}
-        
+
         if volume_max_concurrent_copies_override is not None:
-            volume_overrides["max_concurrent_copies"] = volume_max_concurrent_copies_override
-        
+            volume_overrides["max_concurrent_copies"] = (
+                volume_max_concurrent_copies_override
+            )
+
         if volume_delete_and_reload_override is not None:
-            volume_overrides["delete_and_reload"] = volume_delete_and_reload_override.lower() == "true"
-        
+            volume_overrides["delete_and_reload"] = (
+                volume_delete_and_reload_override.lower() == "true"
+            )
+
         if volume_folder_path_override is not None:
             volume_overrides["folder_path"] = volume_folder_path_override
-        
+
         if volume_delete_checkpoint_override is not None:
-            volume_overrides["delete_checkpoint"] = volume_delete_checkpoint_override.lower() == "true"
-        
+            volume_overrides["delete_checkpoint"] = (
+                volume_delete_checkpoint_override.lower() == "true"
+            )
+
         if volume_streaming_timeout_secs_override is not None:
-            volume_overrides["streaming_timeout_seconds"] = volume_streaming_timeout_secs_override
-        
+            volume_overrides["streaming_timeout_seconds"] = (
+                volume_streaming_timeout_secs_override
+            )
+
         if volume_autoloader_options_override is not None:
             try:
-                volume_overrides["autoloader_options"] = json.loads(volume_autoloader_options_override)
+                volume_overrides["autoloader_options"] = json.loads(
+                    volume_autoloader_options_override
+                )
             except json.JSONDecodeError as e:
                 raise ConfigurationError(
                     f"Invalid volume_autoloader_options_override JSON: {e}"
@@ -416,21 +404,29 @@ class ConfigLoader:
                 # Create replication_config if it doesn't exist
                 if "replication_config" not in catalog:
                     catalog["replication_config"] = {}
-                
+
                 # Get existing volume_config or create empty dict
-                existing_volume_config = catalog["replication_config"].get("volume_config", {})
-                
+                existing_volume_config = catalog["replication_config"].get(
+                    "volume_config", {}
+                )
+
                 # Merge overrides with existing config (overrides take precedence)
-                merged_volume_config = merge_dicts_recursive(existing_volume_config, volume_overrides)
+                merged_volume_config = merge_dicts_recursive(
+                    existing_volume_config, volume_overrides
+                )
                 catalog["replication_config"]["volume_config"] = merged_volume_config
 
         # Apply volume overrides to system level replication config if it exists
         if volume_overrides and "replication_config" in config_data:
             # Get existing volume_config or create empty dict
-            existing_volume_config = config_data["replication_config"].get("volume_config", {})
-            
+            existing_volume_config = config_data["replication_config"].get(
+                "volume_config", {}
+            )
+
             # Merge overrides with existing config (overrides take precedence)
-            merged_volume_config = merge_dicts_recursive(existing_volume_config, volume_overrides)
+            merged_volume_config = merge_dicts_recursive(
+                existing_volume_config, volume_overrides
+            )
             config_data["replication_config"]["volume_config"] = merged_volume_config
 
         try:

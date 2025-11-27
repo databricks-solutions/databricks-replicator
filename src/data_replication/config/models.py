@@ -8,7 +8,7 @@ the YAML configuration file for the data replication system.
 from copy import deepcopy
 from enum import Enum
 from typing import List, Optional
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from data_replication.utils import merge_models_recursive
 
@@ -16,12 +16,16 @@ from data_replication.utils import merge_models_recursive
 class ExecuteAt(str, Enum):
     """Enumeration for where to execute certain operations."""
 
+    model_config = ConfigDict(extra="forbid")
+
     SOURCE = "source"
     TARGET = "target"
 
 
 class TableType(str, Enum):
     """Enumeration of supported table types."""
+
+    model_config = ConfigDict(extra="forbid")
 
     MANAGED = "managed"
     STREAMING_TABLE = "streaming_table"
@@ -32,6 +36,7 @@ class TableType(str, Enum):
 class VolumeType(str, Enum):
     """Enumeration of supported volume types."""
 
+    model_config = ConfigDict(extra="forbid")
     MANAGED = "managed"
     EXTERNAL = "external"
     ALL = "all"
@@ -40,6 +45,7 @@ class VolumeType(str, Enum):
 class AuthType(str, Enum):
     """Enumeration of authentication types."""
 
+    model_config = ConfigDict(extra="forbid")
     PAT = "pat"
     OAUTH = "oauth"
 
@@ -47,6 +53,7 @@ class AuthType(str, Enum):
 class UCObjectType(str, Enum):
     """Enumeration of Unity Catalog object types for replication."""
 
+    model_config = ConfigDict(extra="forbid")
     CATALOG = "catalog"
     CATALOG_TAG = "catalog_tag"
     SCHEMA = "schema"
@@ -63,6 +70,8 @@ class UCObjectType(str, Enum):
 
 class SecretConfig(BaseModel):
     """Configuration for Databricks secrets."""
+
+    model_config = ConfigDict(extra="forbid")
 
     secret_scope: str
     secret_pat: Optional[str] = None
@@ -87,6 +96,8 @@ class SecretConfig(BaseModel):
 
 class AuditConfig(BaseModel):
     """Configuration for audit tables"""
+
+    model_config = ConfigDict(extra="forbid")
 
     audit_table: str
     logging_workspace: ExecuteAt = ExecuteAt.TARGET
@@ -113,6 +124,7 @@ class AuditConfig(BaseModel):
 class DatabricksConnectConfig(BaseModel):
     """Configuration for Databricks Connect."""
 
+    model_config = ConfigDict(extra="forbid")
     name: str
     sharing_identifier: Optional[str] = None
     host: str
@@ -121,33 +133,10 @@ class DatabricksConnectConfig(BaseModel):
     cluster_id: Optional[str] = None
 
 
-class TableConfig(BaseModel):
-    """Configuration for individual tables."""
-
-    table_name: str
-
-    @field_validator("table_name")
-    @classmethod
-    def validate_table_name(cls, v):
-        """Convert table name to lowercase."""
-        return v.lower() if v else v
-
-
-class VolumeConfig(BaseModel):
-    """Configuration for individual volumes."""
-
-    volume_name: str
-
-    @field_validator("volume_name")
-    @classmethod
-    def validate_volume_name(cls, v):
-        """Convert volume name to lowercase."""
-        return v.lower() if v else v
-
-
 class BackupConfig(BaseModel):
     """Configuration for backup operations."""
 
+    model_config = ConfigDict(extra="forbid")
     enabled: Optional[bool] = None
     source_catalog: Optional[str] = None
     create_recipient: Optional[bool] = False
@@ -171,6 +160,7 @@ class BackupConfig(BaseModel):
 class ReplicationConfig(BaseModel):
     """Configuration for replication operations."""
 
+    model_config = ConfigDict(extra="forbid")
     enabled: Optional[bool] = None
     create_target_catalog: Optional[bool] = False
     target_catalog_location: Optional[str] = None
@@ -199,6 +189,7 @@ class ReplicationConfig(BaseModel):
 class ReconciliationConfig(BaseModel):
     """Configuration for reconciliation operations."""
 
+    model_config = ConfigDict(extra="forbid")
     enabled: Optional[bool] = None
     create_recon_catalog: Optional[bool] = False
     recon_outputs_catalog: Optional[str] = None
@@ -213,6 +204,7 @@ class ReconciliationConfig(BaseModel):
     exclude_columns: Optional[List[str]] = None
     source_filter_expression: Optional[str] = None
     target_filter_expression: Optional[str] = None
+    threshold: Optional[float] = 100.0
 
     @field_validator("source_catalog", "recon_outputs_catalog")
     @classmethod
@@ -227,8 +219,41 @@ class ReconciliationConfig(BaseModel):
         return v.lower() if v else v
 
 
+class TableConfig(BaseModel):
+    """Configuration for individual tables."""
+    model_config = ConfigDict(extra="forbid")
+
+    table_name: str
+    backup_config: Optional[BackupConfig] = None
+    replication_config: Optional[ReplicationConfig] = None
+    reconciliation_config: Optional[ReconciliationConfig] = None
+
+    @field_validator("table_name")
+    @classmethod
+    def validate_table_name(cls, v):
+        """Convert table name to lowercase."""
+        return v.lower() if v else v
+
+
+class VolumeConfig(BaseModel):
+    """Configuration for individual volumes."""
+    model_config = ConfigDict(extra="forbid")
+
+    volume_name: str
+    backup_config: Optional[BackupConfig] = None
+    replication_config: Optional[ReplicationConfig] = None
+    reconciliation_config: Optional[ReconciliationConfig] = None
+
+    @field_validator("volume_name")
+    @classmethod
+    def validate_volume_name(cls, v):
+        """Convert volume name to lowercase."""
+        return v.lower() if v else v
+
+
 class SchemaConfig(BaseModel):
     """Configuration for individual schemas."""
+    model_config = ConfigDict(extra="forbid")
 
     schema_name: str
     tables: Optional[List[TableConfig]] = None
@@ -252,6 +277,7 @@ class SchemaConfig(BaseModel):
 
 class TargetCatalogConfig(BaseModel):
     """Configuration for target catalogs."""
+    model_config = ConfigDict(extra="forbid")
 
     catalog_name: str
     table_types: Optional[List[TableType]] = None
@@ -274,6 +300,8 @@ class TargetCatalogConfig(BaseModel):
 class ConcurrencyConfig(BaseModel):
     """Configuration for concurrency settings."""
 
+    model_config = ConfigDict(extra="forbid")
+
     max_workers: int = Field(default=4, ge=1, le=32)
     timeout_seconds: int = Field(default=3600, ge=60)
 
@@ -281,6 +309,7 @@ class ConcurrencyConfig(BaseModel):
 class LoggingConfig(BaseModel):
     """Configuration for logging settings."""
 
+    model_config = ConfigDict(extra="forbid")
     level: str = Field(default="INFO")
     format: str = Field(default="json")  # "text" or "json"
     log_to_file: bool = Field(default=False)
@@ -312,6 +341,7 @@ class LoggingConfig(BaseModel):
 class VolumeFilesReplicationConfig(BaseModel):
     """Configuration for volume files replication."""
 
+    model_config = ConfigDict(extra="forbid")
     max_concurrent_copies: int = Field(default=10, ge=1, le=100)
     delete_and_reload: bool = False
     delete_checkpoint: bool = False
@@ -322,18 +352,21 @@ class VolumeFilesReplicationConfig(BaseModel):
     file_ingestion_logging_catalog: Optional[str] = None
     file_ingestion_logging_catalog_location: Optional[str] = None
     file_ingestion_logging_schema: Optional[str] = None
-    file_ingestion_logging_table: Optional[str] = 'detail_file_ingestion_logging'
+    file_ingestion_logging_table: Optional[str] = "detail_file_ingestion_logging"
 
 
 class RetryConfig(BaseModel):
     """Configuration for retry settings."""
 
+    model_config = ConfigDict(extra="forbid")
     max_attempts: int = Field(default=3, ge=1, le=10)
     retry_delay_seconds: int = Field(default=5, ge=1)
 
 
 class ReplicationSystemConfig(BaseModel):
     """Root configuration model for the replication system."""
+
+    model_config = ConfigDict(extra="forbid")
 
     version: str
     replication_group: str
@@ -696,6 +729,8 @@ class ReplicationSystemConfig(BaseModel):
 class AuditLogEntry(BaseModel):
     """Model for audit log entries."""
 
+    model_config = ConfigDict(extra="forbid")
+
     run_id: str
     timestamp: str
     operation_type: str  # backup, delta_share, replication, reconciliation
@@ -727,6 +762,8 @@ class AuditLogEntry(BaseModel):
 class RunSummary(BaseModel):
     """Model for run summary logging."""
 
+    model_config = ConfigDict(extra="forbid")
+
     run_id: str
     start_time: str
     end_time: Optional[str] = None
@@ -743,6 +780,7 @@ class RunSummary(BaseModel):
 class RunResult(BaseModel):
     """Model for operation run results."""
 
+    model_config = ConfigDict(extra="forbid")
     operation_type: str
     catalog_name: str
     schema_name: Optional[str] = None
@@ -751,6 +789,7 @@ class RunResult(BaseModel):
     status: str  # success, failed
     start_time: str
     end_time: str
+    duration_seconds: Optional[float] = None
     error_message: Optional[str] = None
     details: Optional[dict] = None
     attempt_number: Optional[int] = None

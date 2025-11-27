@@ -13,6 +13,7 @@ from data_replication.databricks_operations import DatabricksOperations
 # from delta.tables import DeltaTable
 from ..config.models import (
     RunResult,
+    SchemaConfig,
     TableConfig,
     TableType,
     UCObjectType,
@@ -161,35 +162,34 @@ class ReplicationProvider(BaseProvider):
 
     def process_schema_concurrently(
         self,
-        schema_name: str,
-        table_list: List[TableConfig],
-        volume_list: List[VolumeConfig],
+        schema_config: SchemaConfig,
     ) -> List[RunResult]:
         """Override to add replication-specific schema setup."""
-        replication_config = self.catalog_config.replication_config
+        replication_config = schema_config.replication_config
         if not self.catalog_config.uc_object_types:
             # Create intermediate schema if needed
             if replication_config.intermediate_catalog:
                 self.db_ops.create_schema_if_not_exists(
-                    replication_config.intermediate_catalog, schema_name
+                    replication_config.intermediate_catalog, schema_config.schema_name
                 )
 
             # Create target schema if needed
             self.db_ops.create_schema_if_not_exists(
-                self.catalog_config.catalog_name, schema_name
+                self.catalog_config.catalog_name, schema_config.schema_name
             )
 
-        return super().process_schema_concurrently(schema_name, table_list, volume_list)
+        return super().process_schema_concurrently(schema_config)
 
     def process_table(
         self,
-        schema_name: str,
-        table_name: str,
+        schema_config: SchemaConfig,
+        table_config: TableConfig,
     ) -> List[RunResult]:
         """Process a single table for replication."""
         results = []
-        if self.catalog_config.table_types and len(self.catalog_config.table_types) > 0:
-            result = self._replicate_table(schema_name, table_name)
+        schema_name = schema_config.schema_name
+        if schema_config.table_types and len(schema_config.table_types) > 0:
+            result = self._replicate_table(schema_name, table_config)
             results.append(result)
 
         if self.catalog_config.uc_object_types:
@@ -199,7 +199,7 @@ class ReplicationProvider(BaseProvider):
             ):
                 result = self._replicate_table_tags(
                     schema_name,
-                    table_name,
+                    table_config,
                 )
                 results.extend(result)
             if (
@@ -208,7 +208,7 @@ class ReplicationProvider(BaseProvider):
             ):
                 result = self._replicate_column_tags(
                     schema_name,
-                    table_name,
+                    table_config,
                 )
                 results.extend(result)
             if (
@@ -217,7 +217,7 @@ class ReplicationProvider(BaseProvider):
             ):
                 result = self._replicate_column_comments(
                     schema_name,
-                    table_name,
+                    table_config,
                 )
                 results.extend(result)
 
@@ -225,15 +225,18 @@ class ReplicationProvider(BaseProvider):
             self.audit_logger.log_results(results)
         return results
 
-    def process_volume(self, schema_name: str, volume_name: str) -> List[RunResult]:
+    def process_volume(
+        self, schema_config: SchemaConfig, volume_config: str
+    ) -> List[RunResult]:
         """Process a single volume for replication."""
         results = []
+        schema_name = schema_config.schema_name
         # Check for volume replication first
         if (
             self.catalog_config.volume_types
             and len(self.catalog_config.volume_types) > 0
         ):
-            result = self._replicate_volume(schema_name, volume_name)
+            result = self._replicate_volume(schema_name, volume_config)
             results.extend(result)
         # Check for volume tag replication
         if (
@@ -246,7 +249,7 @@ class ReplicationProvider(BaseProvider):
         ):
             result = self._replicate_volume_tags(
                 schema_name,
-                volume_name,
+                volume_config,
             )
             results.extend(result)
         if results:
@@ -256,20 +259,21 @@ class ReplicationProvider(BaseProvider):
     def _replicate_table(
         self,
         schema_name: str,
-        table_name: str,
+        table_config: TableConfig,
     ) -> RunResult:
         """
         Replicate a single table using deep clone or insert overwrite.
 
         Args:
-            schema_name: Schema name
-            table_name: Table name to replicate
+            schema_config: SchemaConfig object for the schema
+            table_config: TableConfig object for the table to replicate
 
         Returns:
             RunResult object for the replication operation
         """
         start_time = datetime.now(timezone.utc)
-        replication_config = self.catalog_config.replication_config
+        table_name = table_config.table_name
+        replication_config = table_config.replication_config
         source_catalog = replication_config.source_catalog
         target_catalog = self.catalog_config.catalog_name
         source_table = f"`{source_catalog}`.`{schema_name}`.`{table_name}`"
@@ -365,6 +369,7 @@ class ReplicationProvider(BaseProvider):
                     source_table,
                     actual_target_table,
                     replication_operation,
+                    replication_config,
                 )
             elif replication_config.intermediate_catalog:
                 # Two-step replication via intermediate catalog
@@ -382,6 +387,7 @@ class ReplicationProvider(BaseProvider):
                     table_name,
                     pipeline_id,
                     replication_operation,
+                    replication_config,
                 )
             else:
                 # Direct replication
@@ -397,6 +403,7 @@ class ReplicationProvider(BaseProvider):
                     actual_target_table,
                     pipeline_id,
                     replication_operation,
+                    replication_config,
                 )
 
             end_time = datetime.now(timezone.utc)
@@ -506,20 +513,20 @@ class ReplicationProvider(BaseProvider):
                 max_attempts=max_attempts,
             )
 
-    def _create_file_ingestion_logging_table(self, volume_config) -> None:
+    def _create_file_ingestion_logging_table(self, volume_replication_config) -> None:
         """Create file ingestion logging table if not exists."""
         # create detail ingestion logging catalog and schema if not exists
-        if volume_config.create_file_ingestion_logging_catalog:
+        if volume_replication_config.create_file_ingestion_logging_catalog:
             self.db_ops.create_catalog_if_not_exists(
-                volume_config.file_ingestion_logging_catalog,
-                volume_config.file_ingestion_logging_catalog_location,
+                volume_replication_config.file_ingestion_logging_catalog,
+                volume_replication_config.file_ingestion_logging_catalog_location,
             )
 
         self.db_ops.create_schema_if_not_exists(
-            volume_config.file_ingestion_logging_catalog,
-            volume_config.file_ingestion_logging_schema,
+            volume_replication_config.file_ingestion_logging_catalog,
+            volume_replication_config.file_ingestion_logging_schema,
         )
-        detail_ingestion_logging_table = f"`{volume_config.file_ingestion_logging_catalog}`.`{volume_config.file_ingestion_logging_schema}`.`{volume_config.file_ingestion_logging_table}`"
+        detail_ingestion_logging_table = f"`{volume_replication_config.file_ingestion_logging_catalog}`.`{volume_replication_config.file_ingestion_logging_schema}`.`{volume_replication_config.file_ingestion_logging_table}`"
 
         # create detail ingestion logging table if not exists
         self.logger.info(
@@ -543,21 +550,24 @@ class ReplicationProvider(BaseProvider):
             f"File ingestion details are logged in: {detail_ingestion_logging_table}"
         )
 
-    def _replicate_volume(self, schema_name: str, volume_name: str) -> List[RunResult]:
+    def _replicate_volume(
+        self, schema_name: str, volume_config: VolumeConfig
+    ) -> List[RunResult]:
         """
         Replicate a single volume.
 
         Args:
             schema_name: Schema name
-            volume_name: Volume name to replicate
+            volume_config: Volume configuration
 
         Returns:
             RunResult object for the replication operation
         """
 
         start_time = datetime.now(timezone.utc)
-        replication_config = self.catalog_config.replication_config
-        volume_config = replication_config.volume_config
+        volume_name = volume_config.volume_name
+        replication_config = volume_config.replication_config
+        volume_replication_config = replication_config.volume_config
         source_catalog = replication_config.source_catalog
         target_catalog = self.catalog_config.catalog_name
         source_volume = f"`{source_catalog}`.`{schema_name}`.`{volume_name}`"
@@ -565,16 +575,20 @@ class ReplicationProvider(BaseProvider):
         source_path = f"/Volumes/{source_catalog}/{schema_name}/{volume_name}"
         target_path = f"/Volumes/{target_catalog}/{schema_name}/{volume_name}"
         checkpoint_path = f"{target_path}/_checkpoints"
-        detail_ingestion_logging_table = f"`{volume_config.file_ingestion_logging_catalog}`.`{volume_config.file_ingestion_logging_schema}`.`{volume_config.file_ingestion_logging_table}`"
+        detail_ingestion_logging_table = f"`{volume_replication_config.file_ingestion_logging_catalog}`.`{volume_replication_config.file_ingestion_logging_schema}`.`{volume_replication_config.file_ingestion_logging_table}`"
 
         checkpoint_subfolder = (
-            volume_config.folder_path.strip("/")
-            if volume_config.folder_path
+            volume_replication_config.folder_path.strip("/")
+            if volume_replication_config.folder_path
             else "root"
         )
-        if volume_config.folder_path:
-            source_path = f"{source_path}/{volume_config.folder_path.strip('/')}/"
-            target_path = f"{target_path}/{volume_config.folder_path.strip('/')}/"
+        if volume_replication_config.folder_path:
+            source_path = (
+                f"{source_path}/{volume_replication_config.folder_path.strip('/')}/"
+            )
+            target_path = (
+                f"{target_path}/{volume_replication_config.folder_path.strip('/')}/"
+            )
             checkpoint_path = f"{checkpoint_path}/{checkpoint_subfolder}/"
 
         # Prepare autoloader read options
@@ -582,8 +596,11 @@ class ReplicationProvider(BaseProvider):
             "cloudFiles.format": "binaryFile",
         }
         read_options = read_options_always
-        if volume_config.autoloader_options:
-            read_options = {**volume_config.autoloader_options, **read_options_always}
+        if volume_replication_config.autoloader_options:
+            read_options = {
+                **volume_replication_config.autoloader_options,
+                **read_options_always,
+            }
 
         # Extract variables that will be used in the foreachBatch function to avoid serialization issues
         run_id = self.run_id
@@ -597,7 +614,7 @@ class ReplicationProvider(BaseProvider):
             "source_path": source_path,
             "target_path": target_path,
             "checkpoint_path": checkpoint_path,
-            "delete_and_reload": volume_config.delete_and_reload,
+            "delete_and_reload": volume_replication_config.delete_and_reload,
             "error_count": error_count,
             "autoloader_options": read_options,
         }
@@ -617,7 +634,10 @@ class ReplicationProvider(BaseProvider):
                 extra={"run_id": self.run_id, "operation": "replication"},
             )
 
-            if volume_config.delete_checkpoint or volume_config.delete_and_reload:
+            if (
+                volume_replication_config.delete_checkpoint
+                or volume_replication_config.delete_and_reload
+            ):
                 try:
                     self.logger.info(
                         f"Deleting checkpoint directory: {checkpoint_path}"
@@ -630,7 +650,7 @@ class ReplicationProvider(BaseProvider):
                     self.logger.warning(
                         f"An error occurred when trying to remove directory: {checkpoint_path}: {str(e)}"
                     )
-            if volume_config.delete_and_reload:
+            if volume_replication_config.delete_and_reload:
                 try:
                     self.logger.info(f"Deleting target directory: {target_path}")
                     self.target_workspace_client.dbutils.fs.rm(target_path, True)
@@ -640,10 +660,10 @@ class ReplicationProvider(BaseProvider):
                         f"An error occurred when trying to remove directory: {target_path}: {str(e)}"
                     )
 
-            if volume_config.streaming_timeout_seconds:
+            if volume_replication_config.streaming_timeout_seconds:
                 self.spark.conf.set(
                     "spark.databricks.execution.timeout",
-                    volume_config.streaming_timeout_seconds,
+                    volume_replication_config.streaming_timeout_seconds,
                 )
 
             # Use custom retry decorator with logging
@@ -747,11 +767,11 @@ class ReplicationProvider(BaseProvider):
 
                 query_result = None
                 query_result = query.awaitTermination(
-                    volume_config.streaming_timeout_seconds
+                    volume_replication_config.streaming_timeout_seconds
                 )
                 if not query_result:
                     raise ReplicationError(
-                        f"Volume replication streaming query timed out after {volume_config.streaming_timeout_seconds} seconds"
+                        f"Volume replication streaming query timed out after {volume_replication_config.streaming_timeout_seconds} seconds"
                     )
                 return True
 
@@ -767,7 +787,7 @@ class ReplicationProvider(BaseProvider):
                 run_id=run_id,
                 checkpoint_path=checkpoint_path,
                 logging_table=detail_ingestion_logging_table,
-                max_workers=volume_config.max_concurrent_copies,
+                max_workers=volume_replication_config.max_concurrent_copies,
                 read_options=read_options,
             )
 
@@ -932,16 +952,16 @@ class ReplicationProvider(BaseProvider):
         table_name: str,
         pipeline_id: str,
         replication_operation,
+        replication_config,
     ) -> tuple:
         """Replicate table via intermediate catalog."""
-        replication_config = self.catalog_config.replication_config
         intermediate_table = (
             f"{replication_config.intermediate_catalog}.{schema_name}.{table_name}"
         )
 
         # Step 1: Deep clone to intermediate
-        step1_query = (
-            f"CREATE OR REPLACE TABLE {intermediate_table} DEEP CLONE {source_table}"
+        step1_query = self._build_deep_clone_query(
+            source_table, intermediate_table, None, replication_config
         )
 
         result1, last_exception, attempt, max_attempts = replication_operation(
@@ -959,7 +979,7 @@ class ReplicationProvider(BaseProvider):
 
         # Use deep clone
         step2_query = self._build_deep_clone_query(
-            source_table, target_table, pipeline_id
+            source_table, target_table, pipeline_id, replication_config
         )
 
         return (
@@ -974,12 +994,13 @@ class ReplicationProvider(BaseProvider):
         target_table: str,
         pipeline_id: str,
         replication_operation,
+        replication_config,
     ) -> tuple:
         """Replicate table directly to target."""
 
         # Use deep clone
         step1_query = self._build_deep_clone_query(
-            source_table, target_table, pipeline_id
+            source_table, target_table, pipeline_id, replication_config
         )
 
         return *replication_operation(step1_query), step1_query, None
@@ -989,6 +1010,7 @@ class ReplicationProvider(BaseProvider):
         source_table: str,
         target_table: str,
         replication_operation,
+        replication_config,
     ) -> tuple:
         """
         Replicate external table using external location mapping and file copy.
@@ -1000,7 +1022,6 @@ class ReplicationProvider(BaseProvider):
         4. If copy_files is enabled, deep clone source table to target location as delta.`{target_location}`
         5. Drop target table if exists and create from target location
         """
-        replication_config = self.catalog_config.replication_config
 
         # Step 1: Get source table storage location
         source_table_details = self.db_ops.describe_table_detail(source_table)
@@ -1037,9 +1058,9 @@ class ReplicationProvider(BaseProvider):
 
         # Step 4: Deep clone to target location if copy_files is enabled
         if replication_config.copy_files:
-            step1_query = f"""
-            CREATE OR REPLACE TABLE delta.`{target_location}` DEEP CLONE {source_table}
-            """
+            step1_query = self._build_deep_clone_query(
+            source_table, f"delta.`{target_location}`", None, replication_config
+        )
 
             # Execute the deep clone
             result1, last_exception, attempt, max_attempts = replication_operation(
@@ -1103,7 +1124,7 @@ class ReplicationProvider(BaseProvider):
             return f"INSERT OVERWRITE {target_table} SELECT * FROM {source_table}"
 
     def _build_deep_clone_query(
-        self, source_table: str, target_table: str, pipeline_id: str = None
+        self, source_table: str, target_table: str, pipeline_id: str = None, replication_config=None
     ) -> str:
         """Build deep clone query."""
 
@@ -1119,21 +1140,22 @@ class ReplicationProvider(BaseProvider):
     def _replicate_table_tags(
         self,
         schema_name: str,
-        table_name: str,
+        table_config: TableConfig,
     ) -> List[RunResult]:
         """
         Replicate table tags from source to target table.
 
         Args:
             schema_name: Schema name
-            table_name: Table name to replicate tags for
+            table_config: TableConfig object containing table details
 
         Returns:
             RunResult object for the tag replication operation
         """
         start_time = datetime.now(timezone.utc)
         run_results = []
-        replication_config = self.catalog_config.replication_config
+        table_name = table_config.table_name
+        replication_config = table_config.replication_config
         source_catalog = replication_config.source_catalog
         target_catalog = self.catalog_config.catalog_name
         object_type = "table_tag"
@@ -1197,17 +1219,18 @@ class ReplicationProvider(BaseProvider):
     def _replicate_column_tags(
         self,
         schema_name: str,
-        table_name: str,
+        table_config: TableConfig,
     ) -> List[RunResult]:
         """
         Replicate column tags from source to target table.
 
         Args:
             schema_name: Schema name
-            table_name: Table name to replicate column tags for
+            table_config: TableConfig object containing table details
         """
         start_time = datetime.now(timezone.utc)
-        replication_config = self.catalog_config.replication_config
+        table_name = table_config.table_name
+        replication_config = table_config.replication_config
         source_catalog = replication_config.source_catalog
         target_catalog = self.catalog_config.catalog_name
         source_table = f"`{source_catalog}`.`{schema_name}`.`{table_name}`"
@@ -1448,21 +1471,22 @@ class ReplicationProvider(BaseProvider):
     def _replicate_volume_tags(
         self,
         schema_name: str,
-        volume_name: str,
+        volume_config: VolumeConfig,
     ) -> list[RunResult]:
         """
         Replicate volume tags from source to target volume.
 
         Args:
             schema_name: Schema name
-            volume_name: Volume name to replicate tags for
+            volume_config: VolumeConfig object containing volume details
 
         Returns:
             RunResult object for the tag replication operation
         """
         start_time = datetime.now(timezone.utc)
         run_results = []
-        replication_config = self.catalog_config.replication_config
+        volume_name = volume_config.volume_name
+        replication_config = volume_config.replication_config
         source_catalog = replication_config.source_catalog
         target_catalog = self.catalog_config.catalog_name
         object_type = "volume_tag"
@@ -1527,14 +1551,14 @@ class ReplicationProvider(BaseProvider):
     def _replicate_column_comments(
         self,
         schema_name: str,
-        table_name: str,
+        table_config: TableConfig,
     ) -> List[RunResult]:
         """
         Replicate column comments from source to target table.
 
         Args:
             schema_name: Schema name
-            table_name: Table name to replicate comments for
+            table_config: TableConfig object containing table details
         """
 
         # Use custom retry decorator with logging
@@ -1556,7 +1580,8 @@ class ReplicationProvider(BaseProvider):
         result = True
 
         try:
-            replication_config = self.catalog_config.replication_config
+            table_name = table_config.table_name
+            replication_config = table_config.replication_config
             source_catalog = replication_config.source_catalog
             target_catalog = self.catalog_config.catalog_name
             source_table = f"`{source_catalog}`.`{schema_name}`.`{table_name}`"

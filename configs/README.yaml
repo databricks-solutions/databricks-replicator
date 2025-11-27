@@ -203,6 +203,8 @@ reconciliation_config:
   row_count_check: true
   # Optional: enable missing data checks if row count check passes
   missing_data_check: true
+  # Optional: threshold percentage for reconciliation pass. default is 100%.
+  threshold: 100
 
 # Optional: target catalog configurations list. can be overriden by args
 target_catalogs:
