@@ -11,7 +11,7 @@ resources:
               - -o
               - backup
               - --run-id
-              - "{{job.parameters.run_id}}"
+              - "{{job.parameters.run_id}}_{{job.parameters.run_id}}"
               - --target-catalogs
               - "{{job.parameters.target_catalogs}}"
               - --target-schemas
@@ -71,7 +71,7 @@ resources:
         - name: config_path
           default: ${workspace.file_path}/configs/cross_metastore/streaming_tables_defaults.yaml
         - name: run_id
-          default: "{{job.run_id}}"
+          default: "{{job.run_id}}_{{job.repair_count}}"
         - name: target_catalogs
           default: "aaron_replication"
         - name: target_schemas
@@ -83,5 +83,5 @@ resources:
       environments:
         - environment_key: Default
           spec:
-            client: "3"
+            environment_version: "3"
       performance_target: PERFORMANCE_OPTIMIZED

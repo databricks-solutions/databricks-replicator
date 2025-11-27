@@ -33,7 +33,7 @@ resources:
         - name: config_path
           default: ${workspace.file_path}/configs/cross_metastore/uc_metadata_defaults.yaml
         - name: run_id
-          default: "{{job.run_id}}"
+          default: "{{job.run_id}}_{{job.repair_count}}"
         - name: uc_object_types
           default: "all"
         - name: target_catalogs
@@ -47,5 +47,5 @@ resources:
       environments:
         - environment_key: Default
           spec:
-            client: "3"
+            environment_version: "3"
       performance_target: PERFORMANCE_OPTIMIZED
