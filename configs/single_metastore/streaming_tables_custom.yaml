@@ -1,0 +1,47 @@
+# 1. Delta share infra not disabled
+# 2. Enable backup with explicit backup catalog and source catalog name.
+# 3. Enable replication with explicit source catalog name.
+# 4. Enable reconciliation with explicit source catalog name.
+
+version: "1.0"
+
+replication_group: "single_metastore_streaming_tables_defaults"
+
+source_databricks_connect_config:
+  name: "azure"
+  host: "https://adb-984752964297111.11.azuredatabricks.net"
+
+target_databricks_connect_config:
+  name: "azure"
+  host: "https://adb-984752964297111.11.azuredatabricks.net"
+
+audit_config:
+  audit_table: "data_replication.audit.audit_logging"
+
+table_types: ["streaming_table"]
+backup_config:
+  enabled: true
+replication_config:
+  enabled: true
+reconciliation_config:
+  enabled: true
+
+target_catalogs:
+  - catalog_name: "aaron_replication_single_metastore"
+    backup_config:
+      create_backup_catalog: true
+      source_catalog: "aaron_replication"
+      backup_catalog: "aaron_replication_backup_2"
+      add_to_share: false
+    replication_config:
+      source_catalog: "aaron_replication_backup_2"
+    reconciliation_config:
+      source_catalog: "aaron_replication"
+
+concurrency:
+  max_workers: 5
+  timeout_seconds: 1800
+
+retry:
+  max_attempts: 2
+  retry_delay_seconds: 3

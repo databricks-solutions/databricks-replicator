@@ -1,0 +1,53 @@
+# cli: data-replicator configs/cross_metastore/delta_tables_defaults.yaml --target-catalogs [catalog_name]
+# Steps:
+# 1. Create delta share infrastructure in this tool including recipient, shares and shared catalogs with default system generated names.
+# 2. Add source schema to share.
+# 3. Deep clone delta table into target delta table.
+# 4. Reconciliate data between source and target delta table.
+# 5. For external tables, use external location mapping specified below
+
+version: "1.0"
+
+replication_group: "delta_tables_defaults"
+
+source_databricks_connect_config:
+  name: "azure"
+  host: "https://adb-984752964297111.11.azuredatabricks.net"
+  token:
+    secret_scope: "test_kr"
+    secret_pat: "pat_source"
+
+target_databricks_connect_config:
+  name: "aws"
+  host: "https://e2-demo-field-eng.cloud.databricks.com"
+  token:
+    secret_scope: "test_kr"
+    secret_pat: "pat_target"
+
+external_location_mapping:
+  "abfss://aaboode@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/aaron2"
+
+audit_config:
+  audit_table: "data_replication.audit.audit_logging"
+
+table_types: ["external", "managed"]
+backup_config:
+  enabled: true
+  create_recipient: true
+  create_share: true
+  add_to_share: true  
+replication_config:
+  enabled: true
+  create_target_catalog: true
+  create_shared_catalog: true
+reconciliation_config:
+  enabled: true
+  create_shared_catalog: true
+
+concurrency:
+  max_workers: 5
+  timeout_seconds: 1800
+
+retry:
+  max_attempts: 2
+  retry_delay_seconds: 3

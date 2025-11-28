@@ -1,0 +1,261 @@
+version: "1.0"
+
+# Mandatory: Replication group name - identifier for the replication job
+replication_group: "readme_example_group"
+
+# Mandatory: Source Databricks details
+source_databricks_connect_config:
+  # Mandatory: source name identifier
+  name: "azure"
+  # Optional: source metastore id. Required if replication_config.create_shared_catalog is true and source spark can not be created.e.g. due to network restriction.
+  sharing_identifier: "azure:eastus2:b86c6879-8c55-4e70-a585-18d16a4fa6e9"
+  # Mandatory: Source Databricks workspace url. Must be provided at args level(highest priority), replication group level (lowest priority).
+  host: "https://adb-984752964297111.11.azuredatabricks.net/"
+  # Optional: Source Databricks authentication type, pat or oauth. default is "pat".
+  auth_type: "pat"
+  # Optional: Source Databricks access token secret details. Required if job is run outside source Databricks workspace.
+  token:
+    secret_scope: "my_secret_scope"
+    secret_pat: "azure_pat"
+    secret_client_id: null
+    secret_client_secret: null
+  # Optional: Source cluster ID. default is null to use serverless endpoint.
+  cluster_id: null
+
+# Mandatory: Target Databricks details
+target_databricks_connect_config:
+  # Mandatory: target name identifier
+  name: "aws"
+  # Optional: target metastore id. Required if backup_config.create_recipient is true and target spark can not be created.e.g. due to network restriction.
+  sharing_identifier: "aws:us-west-2:b169b504-4c54-49f2-bc3a-adf4b128f36d"
+  # Mandatory: Target Databricks workspace url. Must be provided at args level(highest priority), replication group level (lowest priority).
+  host: "https://e2-demo-field-eng.cloud.databricks.com/"
+  # Optional: Source Databricks authentication type, pat or oauth. default is "pat".
+  auth_type: "pat"  
+  # Optional: Target Databricks access token secret details. Required if job is run outside target Databricks workspace.
+  token:
+    secret_scope: "my_secret_scope"
+    secret_pat: "aws_pat"
+    secret_client_id: null
+    secret_client_secret: null    
+  # Optional: Source cluster ID. default is null to use serverless endpoint.
+  cluster_id: null
+
+# Mandatory: Audit logging configuration
+audit_config:
+  # Mandatory: audit table full name
+  audit_table: "data_replication.audit.logging"
+  # Mandatory: if logged at source or target. default to target
+  logging_workspace: "target"
+  # Optional: whether to create audit catalog if it does not exist. default is false.
+  create_audit_catalog: false
+  # Optional: audit catalog location. default is None.
+  audit_catalog_location: null
+
+# Mandatory if external tables are replicated: external location mapping
+external_location_mapping:
+"abfss://test@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/test/"
+
+# Mandatory: Only one of uc_object_types, table_types, volume_types must be provided at args level(highest priority), catalog level or replication group level (lowest priority).
+# when uc_object_types is provided, uc metadata will be replicated.
+# when table_types is provided, data in tables of specified types will be replicated.
+# when volume_types is provided, files in volumes of specified types will be replicated.
+
+# Optional: replication group level. can be overriden by catalog level or args
+uc_object_types:
+  [
+    "all",
+    # "catalog", 
+    "catalog_tag",
+    # "schema",
+    "schema_tag",
+    "view_tag",
+    # "volume",
+    "volume_tag",
+    "table_tag",
+    "column_tag",
+    "column_comment"
+  ]
+
+# Optional: replication group level. can be overriden by catalog level or args
+# supported types: streaming_table, managed, external, view.
+# streaming table can not be backed up and replicate with other table types together.
+table_types: ["streaming_table"]
+
+# Optional: replication group level. can be overriden by catalog level or args
+# supported volume types: managed, external.
+# volume_types: ["all","managed", "external"]
+
+# Mandatory: At least one of backup_config, replication_config, reconciliation_config must be provided at catalog level or replication group level (lower priority).
+
+# Optional: backup configuration (at replication group level)
+backup_config:
+  # Mandatory at replication group level or catalog level: whether to backup catalog.
+  enabled: true
+  # Optional: source catalog for backup. if not provided, same as target catalog.
+  source_catalog: "catalog_example"
+  # Optional: create delta share recipient. default is false.
+  create_recipient: false
+  # Optional: recipient name. default to <target_databricks_connect_config.name>_recipient
+  recipient_name: "aws_recipient"
+  # Optional: whether to create share on source.default is false.
+  create_share: false
+  # Optional: whether to add the schema to share. default is false.
+  add_to_share: false
+  # Optional: share name. default to <catalog_name>_to_<target_databricks_connect_config.name>_share
+  share_name: "catalog_example_to_aws_share"
+  # Optional: whether to create backup catalog on target. default is false.
+  create_backup_catalog: false
+  # Optional: backup catalog name. must not be set for non-streaming table replication.
+  # default to __replication_internal_<catalog_name>_to_<target_databricks_connect_config.name>
+  backup_catalog: "__replication_internal_catalog_example_to_aws"
+  # Optional: backup catalog location. default is None.
+  backup_catalog_location: null
+  # Optional: prefix for backup schema names. default is None.
+  backup_schema_prefix: null
+  # Optional: share name. default to <backup_catalog>_share
+  backup_share_name: "__replication_internal_catalog_example_to_aws_share"
+
+# Optional: replication configuration (at replication group level)
+replication_config:
+  # Mandatory at replication group level or catalog level: whether to replicate catalog.
+  enabled: true
+  # Optional: whether to replicate the catalog if it does not exist on target.default is false.
+  create_target_catalog: false
+  # Optional: target catalog location. default is None.
+  target_catalog_location: null
+  # Optional: whether to create the shared catalog. default is false.
+  create_shared_catalog: false
+  # Optional: share name. default to __replication_internal_<catalog_name>_to_<target_databricks_connect_config.name>_share for streaming table
+  # <catalog_name>_to_<target_databricks_connect_config.name>_share for others
+  share_name: "__replication_internal_catalog_example_to_aws_share"
+  # Optional: shared catalog name/source catalog name. default to __replication_internal_<catalog_name>_from_<source_databricks_connect_config.name>_shared for streaming table, default to target_catalog for others
+  # <catalog_name>_from_<source_databricks_connect_config.name>_shared for others
+  source_catalog: "__replication_internal_catalog_example_from_azure_shared"
+  # Optional: whether to create intermediate catalog for replication. default is false.
+  create_intermediate_catalog: false
+  # Optional: intermediate catalog for replication. default is None.
+  intermediate_catalog: null
+  # Optional: intermediate catalog location. default is None.
+  intermediate_catalog_location: null
+  # Optional: whether to enforce schema during replication. default is true.
+  enforce_schema: true
+  # Optional: whether to overwrite tags during replication. default is true.
+  overwrite_tags: true
+  # Optional: whether to overwrite comments during replication. default is true.
+  overwrite_comments: true
+  # Optional: whether to copy files during external table replication. default is true.
+  copy_files: true
+
+# Optional: reconciliation configuration (at replication group level)
+reconciliation_config:
+  # Mandatory at replication group level or catalog level: whether to perform reconciliation.
+  enabled: true
+  # Optional: whether to create reconciliation catalog if it does not exist. default is false.
+  create_recon_catalog: false
+  # Optional: reconciliation outputs catalog name. default to same as audit catalog.
+  recon_outputs_catalog: "replication"
+  # Optional: reconciliation catalog location. default is None.
+  recon_catalog_location: null
+  # Optional: reconciliation outputs schema name. default to same as audit schema.
+  recon_outputs_schema: "audit"
+  # Optional: whether to create the shared catalog. default is false.
+  create_shared_catalog: false
+  # Optional: share name. default to <catalog_name>_to_<target_databricks_connect_config.name>_share
+  share_name: "catalog_example_to_aws_share"
+  # Optional: shared catalog name/source catalog name. default to <catalog_name>_from_<source_databricks_connect_config.name>_shared
+  source_catalog: "catalog_example_from_azure_shared"
+  # Optional: columns to exclude from reconciliation. default is empty list.
+  exclude_columns: []
+  # Optional: filter expressions for source tables. default is none.
+  source_filter_expression: null
+  # Optional: filter expressions for target tables. default is none.
+  target_filter_expression: null
+  # Optional: enable schema checks
+  schema_check: true
+  # Optional: enable row count checks if schema_check passes
+  row_count_check: true
+  # Optional: enable missing data checks if row count check passes
+  missing_data_check: true
+
+# Optional: target catalog configurations list. can be overriden by args
+target_catalogs:
+  # Mandatory: target catalog name
+  - catalog_name: "catalog_example"
+    # Optional at replication group level or catalog level: supported types: streaming_table, managed, external.
+    # streaming table can not be backed up and replicate with other table types together.
+    table_types: ["streaming_table"]
+    # Optional at replication group level or catalog level: supported volume types: managed, external.
+    # Note: external volumes require external_location_mapping configuration above
+    # supported volume types: managed, external.
+    volume_types: ["managed", "external"]
+    # Optional: target_schema list. target_schemas takes precedence over schema_filter_expression. can be overriden by args
+    target_schemas:
+      # Optional: target schema name list. if not provided, all schemas are included based on schema_filter_expression or all schemas in catalog.
+      # config schema_filter_expression and target_schemas at the same time not allowed.
+      - schema_name: "bonze_1"
+      - schema_name: "bonze_2"
+        # Optional: include specific tables in the schema. if not provided, all tables are included. can be overriden by args
+        tables:
+          - table_name: "product_metrics"
+          - table_name: "sales_data"
+        # Optional: include specific volumes in the schema. if not provided, all volumes are included.
+        volumes:
+          - volume_name: "data_volume"
+          - volume_name: "temp_volume"
+      - schema_name: "bonze_3"
+        # Optional: exclude specific tables in the schema. if not provided, all tables are included.
+        exclude_tables:
+          - table_name: "temp_table"
+        # Optional: exclude specific volumes in the schema. if not provided, all volumes are included.
+        exclude_volumes:
+          - volume_name: "old_volume"
+      - schema_name: "bonze_4"
+        # Optional: filter to select specific tables in the schema using SQL expression.
+        # config table_filter_expression and tables at the same time not allowed.
+        table_filter_expression: "tableName like 'fact_%' or tableName like 'dim_%'"
+    # Optional: exclude_schema list.
+    exclude_schemas:
+      # Optional: exclude specific schemas in the catalog.
+      - schema_name: "bonze_exclude_1"
+      - schema_name: "bonze_exclude_2"
+    # Optional: filter to select specific schemas.
+    # config schema_filter_expression and target_schemas at the same time not allowed.
+    schema_filter_expression: "databaseName like 'bonze_%'"
+    # Optional: backup configuration (at catalog level, overrides replication group level config)
+    backup_config:
+    # check config at replication group level
+    # Optional: replication configuration (at catalog level, overrides replication group level config)
+    replication_config:
+    # check config at replication group level
+    # Optional: reconciliation configuration (at catalog level, overrides replication group level config)
+    reconciliation_config:
+    # check config at replication group level
+
+# Optional: Concurrency settings
+concurrency:
+  # Optional: maximum number of concurrent tasks. default is 4. can be overridden by args
+  max_workers: 4
+  # Optional: timeout for each task. default is 3600.
+  timeout_seconds: 3600
+
+# Optional: Retry settings
+retry:
+  # Optional: maximum number of retry attempts. default is 3.
+  max_attempts: 3
+  # Optional: delay between retry attempts in seconds. default is 5.
+  retry_delay_seconds: 5
+
+# Optional: Logging settings
+logging:
+  # Optional: logging level. default is "INFO".
+  # Supported levels: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+  # Optional: log format. default is "json".
+  # Supported formats: "text" or "json"
+  format: "json"
+  # Optional: whether to log to file. default is false.
+  log_to_file: false
+  # Optional: log file path. default is None.
+  # Required if log_to_file is true
+  log_file_path: null

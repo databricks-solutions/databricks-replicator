@@ -1,0 +1,87 @@
+resources:
+  jobs:
+    data_replication:
+      name: data_replication
+      tasks:
+        - task_key: backup
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/data_replication/main.py
+            parameters:
+              - "{{job.parameters.config_path}}"
+              - -o
+              - backup
+              - --run-id
+              - "{{job.parameters.run_id}}"
+              - --target-catalogs
+              - "{{job.parameters.target_catalogs}}"
+              - --target-schemas
+              - "{{job.parameters.target_schemas}}"
+              - --target-tables
+              - "{{job.parameters.target_tables}}"
+              - --concurrency
+              - "{{job.parameters.concurrency}}"
+          environment_key: Default
+        - task_key: replication
+          depends_on:
+            - task_key: backup
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/data_replication/main.py
+            parameters:
+              - "{{job.parameters.config_path}}"
+              - -o
+              - replication
+              - --run-id
+              - "{{job.parameters.run_id}}"
+              - --target-catalogs
+              - "{{job.parameters.target_catalogs}}"
+              - --target-schemas
+              - "{{job.parameters.target_schemas}}"
+              - --target-tables
+              - "{{job.parameters.target_tables}}"
+              - --concurrency
+              - "{{job.parameters.concurrency}}"
+          environment_key: Default
+        - task_key: reconciliation
+          depends_on:
+            - task_key: replication
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/data_replication/main.py
+            parameters:
+              - "{{job.parameters.config_path}}"
+              - -o
+              - reconciliation
+              - --run-id
+              - "{{job.parameters.run_id}}"
+              - --target-catalogs
+              - "{{job.parameters.target_catalogs}}"
+              - --target-schemas
+              - "{{job.parameters.target_schemas}}"
+              - --target-tables
+              - "{{job.parameters.target_tables}}"
+              - --concurrency
+              - "{{job.parameters.concurrency}}"
+          environment_key: Default
+      tags:
+        dev: aaron_pan
+      queue:
+        enabled: true
+      parameters:
+        - name: concurrency
+          default: "5"
+        - name: config_path
+          default: ${workspace.file_path}/configs/cross_metastore/streaming_tables_defaults.yaml
+        - name: run_id
+          default: "{{job.run_id}}"
+        - name: target_catalogs
+          default: "aaron_replication"
+        - name: target_schemas
+          default: ""
+        - name: target_tables
+          default: ""
+      run_as:
+        user_name: aaron.pan@databricks.com
+      environments:
+        - environment_key: Default
+          spec:
+            client: "3"
+      performance_target: PERFORMANCE_OPTIMIZED

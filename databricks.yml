@@ -1,0 +1,29 @@
+# This is a Databricks asset bundle definition for data_replication.
+# See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
+bundle:
+  name: data_replication
+  uuid: a6cdd5b0-e8f6-477b-be7c-d6ea1da7dc6d
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    # The default target uses 'mode: development' to create a development copy.
+    # - Deployed resources get prefixed with '[dev my_user_name]'
+    # - Any job schedules and triggers are paused by default.
+    # See also https://docs.databricks.com/dev-tools/bundles/deployment-modes.html.
+    mode: development
+    default: true
+    workspace:
+      host: https://e2-demo-field-eng.cloud.databricks.com
+
+  prod:
+    mode: production
+    workspace:
+      host: https://e2-demo-field-eng.cloud.databricks.com
+      # We explicitly deploy to /Workspace/Users/aaron.pan@databricks.com to make sure we only have a single copy.
+      root_path: /Workspace/Users/aaron.pan@databricks.com/.bundle/${bundle.name}/${bundle.target}
+    permissions:
+      - user_name: aaron.pan@databricks.com
+        level: CAN_MANAGE
