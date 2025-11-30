@@ -8,7 +8,8 @@ Cloud agnostic - cross metastore or same metastore replication
 
 This system provides incremental data and UC metadata replication capabilities between Databricks env or within same env with D2D Delta Share, Deep Clone and Autoloader, with specialized handling for Streaming Tables. It supports multiple operation types that can be run independently or together.
 
-## Supported Object Types
+## Object Types
+### Supported Object Types
 - Data Replication
   - Managed Tables
   - External Tables
@@ -20,9 +21,8 @@ This system provides incremental data and UC metadata replication capabilities b
   - Catalogs
   - Schemas
   - Tags (catalog, schema, table, columns, views, volume)
-  - Column Comments
-  
-## WIP
+  - Column Comments 
+### In Development
 - UC metadata
   - Tables
   - Views
@@ -30,7 +30,7 @@ This system provides incremental data and UC metadata replication capabilities b
   - Permissions
   - Materialized Views
 
-## Unsupported Object Types
+### Unsupported Object Types
 - Databricks Workspace Assets is not yet supported, but maybe considered in future roadmap
 - Streaming checkpoints are not replicated. Streaming state handling should be managed outside this solution.
 
