@@ -20,13 +20,12 @@ This system provides incremental data and UC metadata replication capabilities b
   - External Locations
   - Catalogs
   - Schemas
+  - Volumes
   - Tags (catalog, schema, table, columns, views, volume)
   - Column Comments 
 ### In Development
 - UC metadata
-  - Tables
   - Views
-  - Volumes
   - Permissions
   - Materialized Views
 
