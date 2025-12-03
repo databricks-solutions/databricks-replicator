@@ -288,7 +288,6 @@ class BaseProvider(ABC):
                     schema_configs[i] = merge_models_recursive(
                         deepcopy(self.catalog_config), schema_config
                     )
-            print(schema_configs)  # --- IGNORE ---
 
             for schema_config in schema_configs:
                 self.logger.info(
@@ -302,8 +301,6 @@ class BaseProvider(ABC):
                 schema_config = recursive_substitute(
                     schema_config, schema_config.schema_name, "{{schema_name}}"
                 )
-
-                print(schema_config)  # --- IGNORE ---
 
                 uc_object_types_schema_processed = (
                     uc_object_types_catalog_processed.copy()
