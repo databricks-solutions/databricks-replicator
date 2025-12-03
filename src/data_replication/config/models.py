@@ -225,8 +225,8 @@ class ReconciliationConfig(BaseModel):
     recon_outputs_catalog: Optional[str] = None
     recon_outputs_schema: Optional[str] = None
     recon_catalog_location: Optional[str] = None
-    recon_schema_check_table: Optional[str] = None
-    recon_missing_data_table: Optional[str] = None
+    recon_schema_check_table: Optional[str] = 'recon_schema_check'
+    recon_missing_data_table: Optional[str] = 'recon_missing_data'
     create_shared_catalog: Optional[bool] = False
     share_name: Optional[str] = None
     source_catalog: Optional[str] = None

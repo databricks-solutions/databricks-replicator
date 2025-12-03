@@ -234,7 +234,7 @@ class BackupProvider(BaseProvider):
     def process_table(self, schema_config: SchemaConfig, table_config: TableConfig) -> List[RunResult]:
         """Process a single table for backup."""
         results = []
-        result = self._backup_table(schema_config.schema_name, table_config)
+        result = self._backup_table(schema_config, table_config)
         if result:
             results.append(result)
             self.audit_logger.log_results(results)

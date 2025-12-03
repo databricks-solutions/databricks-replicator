@@ -2,7 +2,7 @@
 # Multiple environments can be defined, but only one environment can be marked as default. environment name must be unique.
 # environment can be provided by args when running the job to override the default environment.
 # Configurations specified here take precedence over configurations specified in config yamls.
-# This is useful for defining different source and target databricks workspaces for different environments. 
+# This is useful for defining different source and target databricks workspaces for different environments.
 # e.g. if Azure is primary and AWS is secondary, you can define environments as azure_to_aws_dev, azure_to_aws_prod for DR failover, aws_to_azure_dev, aws_to_azure_prod for DR failback.
 version: "1.0"
 
@@ -44,6 +44,58 @@ environments:
       sharing_identifier: "aws:us-west-2:b169b504-4c54-49f2-bc3a-adf4b128f36d"
       # Mandatory: Target Databricks workspace url. Must be provided at args (higher priority) or replication group level (lower priority).
       host: "https://e2-demo-field-eng.cloud.databricks.com/"
+      # Optional: Source Databricks authentication type, pat or oauth. default is "pat".
+      auth_type: "pat"
+      # Optional: Target Databricks access token secret details. Required if job is run outside target Databricks workspace.
+      token:
+        # Optional: secret scope name where the token is stored.
+        secret_scope: "test_kr"
+        # Optional: secret name where the pat token is stored. Required for pat authentication.
+        secret_pat: "pat_target"
+        # Optional: secret client id for oauth authentication. Required for oauth authentication.
+        secret_client_id: null
+        # Optional: secret client secret for oauth authentication. Required for oauth authentication.
+        secret_client_secret: null
+      # Optional: Source cluster ID. default is null to use serverless endpoint.
+      cluster_id: null
+
+  # Mandatory: environment name
+  "aws_to_azure_dev":
+    # Optional: description of the environment
+    description: "Development environment for data replication"
+    # Optional: whether this is the default environment, only 1 can be true. default is false.
+    is_default: false
+    # Mandatory: Source Databricks details
+    source_databricks_connect_config:
+      # Mandatory: target name identifier
+      name: "aws"
+      # Optional: target metastore id. Required if backup_config.create_recipient is true and target spark session can not be created.e.g. due to network restriction.
+      sharing_identifier: "aws:us-west-2:b169b504-4c54-49f2-bc3a-adf4b128f36d"
+      # Mandatory: Target Databricks workspace url. Must be provided at args (higher priority) or replication group level (lower priority).
+      host: "https://e2-demo-field-eng.cloud.databricks.com/"
+      # Optional: Source Databricks authentication type, pat or oauth. default is "pat".
+      auth_type: "pat"
+      # Optional: Source Databricks access token secret details. Required if job is run outside source Databricks workspace.
+      token:
+        # Optional: secret scope name where the token is stored.
+        secret_scope: "test_kr"
+        # Optional: secret name where the pat token is stored. Required for pat authentication.
+        secret_pat: "pat_source"
+        # Optional: secret client id for oauth authentication. Required for oauth authentication.
+        secret_client_id: null
+        # Optional: secret client secret for oauth authentication. Required for oauth authentication.
+        secret_client_secret: null
+      # Optional: Source cluster ID. default is null to use serverless endpoint.
+      cluster_id: null
+
+    # Mandatory: Target Databricks details
+    target_databricks_connect_config:
+      # Mandatory: source name identifier
+      name: "azure"
+      # Optional: source metastore id. Required if replication_config.create_shared_catalog is true and source spark can not be created.e.g. due to network restriction.
+      sharing_identifier: "azure:eastus2:b86c6879-8c55-4e70-a585-18d16a4fa6e9"
+      # Mandatory: Source Databricks workspace url. Must be provided at args (higher priority) or replication group level (lower priority).
+      host: "https://adb-984752964297111.11.azuredatabricks.net/"
       # Optional: Source Databricks authentication type, pat or oauth. default is "pat".
       auth_type: "pat"
       # Optional: Target Databricks access token secret details. Required if job is run outside target Databricks workspace.

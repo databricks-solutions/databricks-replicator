@@ -4,7 +4,7 @@
 # 2.1 Deep clone source Streaming table backing table as delta table into backup catalog and add backup schema to share at source
 # 2.2 Add source schema to share at source
 # 3.1 Deep clone backup delta table into target Streaming table backing table at target. Note: For Streaming Table replication, tables need to already exist in target before Deep Clone
-# 3.2 Deep clone source delta table into target delta table backing table at target. 
+# 3.2 Deep clone source delta table into target delta table backing table at target.
 # 4. Reconciliate tables between source and target.
 
 version: "1.0"
@@ -25,6 +25,9 @@ backup_config:
   create_share: true
   add_to_share: true
 replication_config:
+  enabled: true
+  create_shared_catalog: true
+reconciliation_config:
   enabled: true
   create_shared_catalog: true
 
