@@ -12,6 +12,7 @@ from concurrent.futures import as_completed
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import List, Optional
+import random
 
 from databricks.connect import DatabricksSession
 from databricks.sdk import WorkspaceClient
@@ -22,6 +23,7 @@ from pyspark.sql.utils import AnalysisException
 from data_replication.utils import (
     filter_common_maps,
     merge_models_recursive,
+    recursive_substitute,
     retry_with_logging,
     merge_maps,
     map_cloud_url,
@@ -52,6 +54,7 @@ from ..constants import (
     DICT_FOR_CREATION_SCHEMA,
     DICT_FOR_UPDATE_CATALOG,
     DICT_FOR_UPDATE_SCHEMA,
+    SKIP_PROCESSED_TABLES,
 )
 
 
@@ -68,11 +71,9 @@ class BaseProvider(ABC):
         catalog_config: TargetCatalogConfig,
         source_databricks_config: DatabricksConnectConfig,
         target_databricks_config: DatabricksConnectConfig,
-        retry: Optional[RetryConfig] = None,
-        max_workers: int = 2,
-        timeout_seconds: int = 1800,
         cloud_url_mapping: Optional[dict] = None,
         audit_logger: Optional[AuditLogger] = None,
+        completed_run_results: Optional[List[RunResult]] = [],
     ):
         """
         Initialize the base provider.
@@ -83,7 +84,6 @@ class BaseProvider(ABC):
             db_ops: Databricks operations helper
             run_id: Unique run identifier
             catalog_config: Target catalog configuration
-            retry: Retry configuration
             max_workers: Maximum number of concurrent workers
             timeout_seconds: Timeout for operations
         """
@@ -95,11 +95,8 @@ class BaseProvider(ABC):
         self.catalog_config = catalog_config
         self.source_databricks_config = source_databricks_config
         self.target_databricks_config = target_databricks_config
-        self.retry = (
-            retry if retry else RetryConfig(max_attempts=1, retry_delay_seconds=5)
-        )
-        self.max_workers = max_workers
-        self.timeout_seconds = timeout_seconds
+        self.max_workers = self.catalog_config.concurrency.max_workers
+        self.timeout_seconds = self.catalog_config.concurrency.timeout_seconds
         self.cloud_url_mapping = cloud_url_mapping
         self.audit_logger = audit_logger
         self.catalog_name: Optional[str] = None
@@ -109,6 +106,11 @@ class BaseProvider(ABC):
         self.target_dbops = None
         self.source_workspace_client = None
         self.target_workspace_client = None
+        self.processed_objects: List[str] = []
+        self.completed_objects: List[str] = [
+            f"{result.catalog_name}.{result.schema_name}.{result.object_name}"
+            for result in completed_run_results
+        ]
 
     @abstractmethod
     def setup_operation_catalogs(self):
@@ -282,13 +284,86 @@ class BaseProvider(ABC):
                 if len(uc_object_types_catalog_processed) == 0:
                     return results
 
+            # construct schema_table_filter_expression from target_schemas to sample across all tables
+            if (
+                self.catalog_config.reconciliation_config
+                and self.catalog_config.reconciliation_config.enable_sampling
+                and not self.catalog_config.schema_table_filter_expression
+            ):
+                self.catalog_config.schema_table_filter_expression = (
+                    self._build_schema_table_filter_expression()
+                )
+
+            # Handle schema-table filter expression if configured
+            if self.catalog_config.schema_table_filter_expression:
+                # Get schema-table combinations to process based on filter expression
+                schema_table_combinations = self._get_schema_tables()
+
+                # sample tables across schemas only if sampling is enabled
+                if (
+                    self.catalog_config.reconciliation_config
+                    and self.catalog_config.reconciliation_config.enable_sampling
+                ):
+                    total_tables = len(schema_table_combinations)
+                    sample_size = min(
+                        self.catalog_config.reconciliation_config.no_of_sampling_tables,
+                        total_tables,
+                    )
+                    self.logger.info(
+                        f"Sampling {sample_size} tables out of {total_tables} total tables for reconciliation"
+                    )
+                    schema_table_combinations = random.sample(
+                        schema_table_combinations, sample_size
+                    )
+                # Build schema-level configs from schema-table combinations
+                # do not overwrite existing target_schemas config if already provided
+                schema_configs = {}
+                schema_configs_update = {}
+                for item in schema_table_combinations:
+                    schema_name = item["schema_name"]
+                    table_name = item["table_name"]
+                    if schema_name not in schema_configs:
+                        if getattr(self.catalog_config, "target_schemas", None):
+                            schema_config = next(
+                                (
+                                    schema
+                                    for schema in self.catalog_config.target_schemas
+                                    if schema.schema_name == schema_name
+                                ),
+                                SchemaConfig(schema_name=schema_name, tables=[]),
+                            )
+                        else:
+                            schema_config = SchemaConfig(
+                                schema_name=schema_name, tables=[]
+                            )
+                        schema_configs[schema_name] = schema_config
+                        schema_configs_update[schema_name] = schema_config.model_copy()
+                        tables = []
+                        schema_configs_update[schema_name].tables = tables
+                    if getattr(schema_configs[schema_name], "tables", None):
+                        table_config = next(
+                            (
+                                table
+                                for table in schema_configs[schema_name].tables
+                                if table.table_name == table_name
+                            ),
+                            TableConfig(table_name=table_name),
+                        )
+                    else:
+                        table_config = TableConfig(table_name=table_name)
+                    schema_configs_update[schema_name].tables.append(table_config)
+
+                # Update the catalog config target_schemas with the filtered schemas and tables
+                self.catalog_config.target_schemas = list(
+                    schema_configs_update.values()
+                )
+
             # Get schemas to process
             schema_configs = self._get_schemas()
             schema_list = [schema.schema_name for schema in schema_configs]
             self.logger.info(
                 f"Starting {self.get_operation_name()} schemas: {schema_list}"
             )
-
             # Merge schema-level configs into catalog-level config.
             if schema_configs:
                 for i, schema_config in enumerate(schema_configs):
@@ -303,6 +378,10 @@ class BaseProvider(ABC):
                         "run_id": self.run_id,
                         "operation": self.get_operation_name(),
                     },
+                )
+
+                schema_config = recursive_substitute(
+                    schema_config, schema_config.schema_name, "{{schema_name}}"
                 )
 
                 uc_object_types_schema_processed = (
@@ -486,12 +565,13 @@ class BaseProvider(ABC):
         results: List[RunResult] = []
         tables = [table_config.table_name for table_config in table_configs]
         schema_name = schema_config.schema_name
+        concurrency = schema_config.concurrency
         self.logger.info(
-            f"starting {self.get_operation_name()} of {len(tables)} tables in schema {self.catalog_name}.{schema_name} using {self.max_workers} workers"
+            f"starting {self.get_operation_name()} of {len(tables)} tables in schema {self.catalog_name}.{schema_name} using {concurrency.max_workers} workers"
         )
         self.logger.info(f"Tables: {tables}")
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=concurrency.max_workers) as executor:
             # Submit table processing jobs
             future_to_table = {
                 executor.submit(
@@ -537,6 +617,8 @@ class BaseProvider(ABC):
                         start_time,
                     )
                     results.append(result)
+                finally:
+                    self.processed_objects.append(f"{schema_name}.{table_name}")
 
         self.logger.info(
             f"All tables processed in schema {self.catalog_name}.{schema_name}"
@@ -566,12 +648,13 @@ class BaseProvider(ABC):
         results: List[RunResult] = []
         volumes = [volume_config.volume_name for volume_config in volume_configs]
         schema_name = schema_config.schema_name
+        concurrency = schema_config.concurrency
         self.logger.info(
-            f"starting {self.get_operation_name()} of {len(volumes)} volumes in schema {self.catalog_name}.{schema_name} using {self.max_workers} workers"
+            f"starting {self.get_operation_name()} of {len(volumes)} volumes in schema {self.catalog_name}.{schema_name} using {concurrency.max_workers} workers"
         )
         self.logger.info(f"Volumes: {volumes}")
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=concurrency.max_workers) as executor:
             # Submit volume processing jobs
             future_to_volume = {
                 executor.submit(
@@ -616,12 +699,54 @@ class BaseProvider(ABC):
                         start_time,
                     )
                     results.append(result)
+                finally:
+                    self.processed_objects.append(f"{schema_name}.{volume_name}")
 
         self.logger.info(
             f"All volumes processed in schema {self.catalog_name}.{schema_name}"
         )
 
         return results
+
+    def _build_schema_table_filter_expression(self) -> str:
+        """construct schema_table_filter_expression from target_schemas if provided"""
+        if self.catalog_config.target_schemas:
+            schema_table_filters = []
+            for schema in self.catalog_config.target_schemas:
+                schema_name = schema.schema_name
+                if schema.tables:
+                    table_names = [
+                        f"table_name = '{table.table_name}'" for table in schema.tables
+                    ]
+                    table_filter_expr = " or ".join(table_names)
+                    schema_table_filter = (
+                        f"(table_schema = '{schema_name}' and ({table_filter_expr}))"
+                    )
+                elif schema.exclude_tables:
+                    table_names = [
+                        f"table_name != '{table.table_name}'"
+                        for table in schema.exclude_tables
+                    ]
+                    table_filter_expr = " and ".join(table_names)
+                    schema_table_filter = (
+                        f"(table_schema = '{schema_name}' and ({table_filter_expr}))"
+                    )
+                elif schema.table_filter_expression:
+                    schema_table_filter = f"(table_schema = '{schema_name}' and ({schema.table_filter_expression}))"
+                else:
+                    schema_table_filter = f"(table_schema = '{schema_name}')"
+                schema_table_filters.append(schema_table_filter)
+            schema_table_filter_expression = " or ".join(schema_table_filters)
+            return schema_table_filter_expression
+
+        if self.catalog_config.exclude_schemas:
+            schema_names = [
+                f"table_schema != '{schema.schema_name}'"
+                for schema in self.catalog_config.exclude_schemas
+            ]
+            schema_table_filter_expression = " and ".join(schema_names)
+            return schema_table_filter_expression
+        return self.catalog_config.schema_table_filter_expression
 
     def _create_failed_result(
         self,
@@ -697,15 +822,8 @@ class BaseProvider(ABC):
 
             return target_schemas
 
-        if self.catalog_config.schema_filter_expression:
-            # Use schema filter expression
-            schema_list = self.db_ops.get_schemas_by_filter(
-                self.catalog_name,
-                self.catalog_config.schema_filter_expression,
-            )
-        else:
             # Process all schemas
-            schema_list = self.db_ops.get_all_schemas(self.catalog_name)
+        schema_list = self.db_ops.get_all_schemas(self.catalog_name)
 
         # Apply exclude_schemas filter if configured
         schema_list = [
@@ -713,6 +831,45 @@ class BaseProvider(ABC):
         ]
 
         return [SchemaConfig(schema_name=item) for item in schema_list]
+
+    def _get_schema_tables(self) -> List[dict]:
+        """
+        Get list of schema and table combinations when schema_table_filter_expression is configured.
+        This method is triggered when catalog_config.schema_table_filter_expression is set.
+
+        Returns:
+            List of dictionaries with 'schema_name' and 'table_name' keys
+        """
+        schema_table_filter_expression = (
+            self.catalog_config.schema_table_filter_expression
+        )
+
+        if not schema_table_filter_expression:
+            self.logger.warning(
+                f"_get_schema_tables called but no schema_table_filter_expression configured for catalog {self.catalog_config.catalog_name}"
+            )
+            return []
+
+        # Use database operations to get schema-table combinations matching the filter expression
+        schema_tables = self.db_ops.get_schema_tables_by_filter(
+            self.catalog_name, schema_table_filter_expression
+        )
+        schema_tables_filtered = schema_tables
+        # Skip already processed tables
+        if SKIP_PROCESSED_TABLES:
+            schema_tables_filtered = [
+                item
+                for item in schema_tables
+                if f"{item['schema_name']}.{item['table_name']}"
+                not in self.processed_objects
+                and f"{self.catalog_config.catalog_name}.{item['schema_name']}.{item['table_name']}"
+                not in self.completed_objects
+            ]
+        if len(schema_tables_filtered) != len(schema_tables):
+            self.logger.info(
+                f"Found {len(schema_tables)} and exclude {len(schema_tables) - len(schema_tables_filtered)} processed tables"
+            )
+        return schema_tables_filtered
 
     def _get_tables(
         self, schema_config: SchemaConfig, table_list: List[TableConfig]
@@ -758,12 +915,28 @@ class BaseProvider(ABC):
 
         # Apply exclusions first
         table_names = [table for table in table_names if table not in exclude_names]
+
+        table_names_filtered = table_names
+        # Skip already processed tables
+        if SKIP_PROCESSED_TABLES:
+            table_names = [
+                table
+                for table in table_names
+                if f"{schema_name}.{table}" not in self.processed_objects
+                and f"{self.catalog_config.catalog_name}.{schema_name}.{table}"
+                not in self.completed_objects
+            ]
+        if len(table_names_filtered) != len(table_names):
+            self.logger.info(
+                f"Found {len(table_names)} and exclude {len(table_names) - len(table_names_filtered)} processed tables"
+            )
+
         filtered_table_names = self.db_ops.filter_tables_by_type(
             self.catalog_name,
             schema_name,
-            table_names,
+            table_names_filtered,
             schema_config.table_types,
-            self.max_workers,
+            schema_config.concurrency.parallel_table_filter,
         )
         # Then filter by table types
         return [table for table in tables if table.table_name in filtered_table_names]
@@ -815,10 +988,10 @@ class BaseProvider(ABC):
             volume for volume in volumes if volume.volume_name in filtered_volume_names
         ]
 
-    def _create_tagging_operation(self):
+    def _create_tagging_operation(self, retry: RetryConfig):
         """Create a tagging operation function with retry and logging."""
 
-        @retry_with_logging(self.retry, self.logger)
+        @retry_with_logging(retry, self.logger)
         def tagging_operation(
             unset_query: str,
             set_query: str,
@@ -925,6 +1098,7 @@ class BaseProvider(ABC):
         table_name: str = None,
         column_name: str = None,
         volume_name: str = None,
+        retry: RetryConfig = None,
     ) -> RunResult:
         """
         Execute tag replication operation for a single table or column.
@@ -960,10 +1134,10 @@ class BaseProvider(ABC):
             )
 
             attempt = 1
-            max_attempts = self.retry.max_attempts
+            max_attempts = retry.max_attempts
             last_exception = None
             # Create tagging operation with retry and logging
-            tagging_operation = self._create_tagging_operation()
+            tagging_operation = self._create_tagging_operation(retry)
 
             (
                 uncommon_source_tag_maps_list,
@@ -1105,7 +1279,7 @@ class BaseProvider(ABC):
         target_catalog = self.catalog_config.catalog_name
         object_type = "catalog_tag"
         attempt = 1
-        max_attempts = self.retry.max_attempts
+        max_attempts = self.catalog_config.retry.max_attempts
 
         if not self.source_dbops.if_catalog_exists(
             source_catalog
@@ -1147,6 +1321,7 @@ class BaseProvider(ABC):
             overwrite_tags=replication_config.overwrite_tags,
             source_catalog=source_catalog,
             target_catalog=target_catalog,
+            retry=self.catalog_config.retry,
         )
         run_results.append(run_result)
         return run_results
@@ -1172,7 +1347,7 @@ class BaseProvider(ABC):
         target_catalog = self.catalog_config.catalog_name
         object_type = "schema_tag"
         attempt = 1
-        max_attempts = self.retry.max_attempts
+        max_attempts = schema_config.retry.max_attempts
 
         if not self.source_dbops.if_schema_exists(
             source_catalog, schema_name
@@ -1217,6 +1392,7 @@ class BaseProvider(ABC):
             source_catalog=source_catalog,
             target_catalog=target_catalog,
             schema_name=schema_name,
+            retry=schema_config.retry,
         )
 
         run_results.append(run_result)
@@ -1237,7 +1413,7 @@ class BaseProvider(ABC):
         target_catalog = self.catalog_config.catalog_name
 
         attempt = 1
-        max_attempts = self.retry.max_attempts
+        max_attempts = self.catalog_config.retry.max_attempts
         last_exception = None
 
         dict_for_creation = DICT_FOR_CREATION_CATALOG.copy()
@@ -1440,7 +1616,7 @@ class BaseProvider(ABC):
         target_schema_full_name = f"{target_catalog}.{schema_name}"
 
         attempt = 1
-        max_attempts = self.retry.max_attempts
+        max_attempts = schema_config.retry.max_attempts
         last_exception = None
 
         dict_for_creation = DICT_FOR_CREATION_SCHEMA

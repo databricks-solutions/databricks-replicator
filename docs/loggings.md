@@ -84,4 +84,8 @@ reconciliation_config:
   recon_catalog_location: null
   # Optional: reconciliation outputs schema name. default to same as audit schema.
   recon_outputs_schema: "audit"
+  # Optional: reconciliation outputs table name for schema check mismatches. default is recon_schema_comparison.
+  recon_schema_check_table: "recon_schema_comparison"
+  # Optional: reconciliation outputs table name for missing data mismatches. default is recon_missing_data_comparison.
+  recon_missing_data_table: "recon_missing_data_comparison"  
 ```

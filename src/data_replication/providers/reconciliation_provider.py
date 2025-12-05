@@ -147,6 +147,7 @@ class ReconciliationProvider(BaseProvider):
         target_catalog = self.catalog_config.catalog_name
         source_table = f"{source_catalog}.{schema_name}.{table_name}"
         target_table = f"{target_catalog}.{schema_name}.{table_name}"
+        retry = table_config.retry
 
         self.logger.info(
             f"Starting reconciliation: {source_table} vs {target_table}",
@@ -170,7 +171,7 @@ class ReconciliationProvider(BaseProvider):
             skipped_checks = []
 
             # Use custom retry decorator with logging
-            @retry_with_logging(self.retry, self.logger)
+            @retry_with_logging(retry, self.logger)
             def reconciliation_operation(query: str):
                 self.logger.debug(
                     f"Executing reconciliation query: {query}",
@@ -585,8 +586,6 @@ class ReconciliationProvider(BaseProvider):
             WHERE comparison_result != 'match'
             ORDER BY column_name
             """
-
-            print(schema_insert_query)  # Debug print
 
             result, last_exception, attempt, max_attempts = reconciliation_operation(
                 schema_insert_query

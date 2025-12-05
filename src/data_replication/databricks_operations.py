@@ -230,7 +230,7 @@ class DatabricksOperations:
         schema_name: str,
         table_names: List[str],
         table_types: List[TableType],
-        max_workers: int = 4,
+        parallel_table_filter: int = 8,
     ) -> List[str]:
         """
         Filter a list of table names to only include selected types using multithreading.
@@ -240,7 +240,7 @@ class DatabricksOperations:
             schema_name: Name of the schema
             table_names: List of table names to filter
             table_types: List of table types to filter by
-            max_workers: Maximum number of threads to use for parallel processing
+            parallel_table_filter: Maximum number of threads to use for parallel processing
 
         Returns:
             List of table names that are of the selected types
@@ -276,7 +276,7 @@ class DatabricksOperations:
         filtered_tables = []
 
         # Use ThreadPoolExecutor for parallel processing
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=parallel_table_filter) as executor:
             # Submit all table type checks
             future_to_table = {
                 executor.submit(check_table_type, table_name): table_name
@@ -339,14 +339,16 @@ class DatabricksOperations:
         """
         try:
             # Get all schemas first
-            schemas_df = self.spark.sql(f"SHOW SCHEMAS IN `{catalog_name}`").filter(
-                'databaseName != "information_schema"'
+            schemas_df = (
+                self.spark.sql(f"SHOW SCHEMAS IN `{catalog_name}`")
+                .filter('databaseName != "information_schema"')
+                .withColumnRenamed("databaseName", "schema_name")
             )
 
             # Apply filter expression
             filtered_df = schemas_df.filter(filter_expression)
 
-            return [row.databaseName for row in filtered_df.collect()]
+            return [row.schema_name for row in filtered_df.collect()]
         except Exception as e:
             print(f"Warning: Could not filter schemas in `{catalog_name}`: {e}")
             return []
@@ -369,17 +371,68 @@ class DatabricksOperations:
             full_schema = f"`{catalog_name}`.`{schema_name}`"
 
             # Get all tables first
-            tables_df = self.spark.sql(f"SHOW TABLES IN {full_schema}").filter(
-                "isTemporary == false"
+            tables_df = (
+                self.spark.sql(f"SHOW TABLES IN {full_schema}")
+                .filter("isTemporary == false")
+                .withColumnRenamed("tableName", "table_name")
+                .withColumnRenamed("database", "schema_name")
             )
 
             # Apply filter expression
             filtered_df = tables_df.filter(filter_expression)
 
-            return [row.tableName for row in filtered_df.collect()]
+            return [row.table_name for row in filtered_df.collect()]
         except Exception as e:
             print(
                 f"Warning: Could not filter tables in `{catalog_name}`.`{schema_name}`: {e}"
+            )
+            return []
+
+    def get_schema_tables_by_filter(
+        self, catalog_name: str, schema_table_filter_expression: str
+    ) -> List[dict]:
+        """
+        Get schema and table combinations matching a filter expression from information_schema.tables.
+
+        Args:
+            catalog_name: Name of the catalog
+            schema_table_filter_expression: SQL filter expression to apply on schema_name and table_name
+
+        Returns:
+            List of dictionaries with 'schema_name' and 'table_name' keys
+        """
+        try:
+            if not schema_table_filter_expression:
+                self.logger.debug(
+                    "No schema-table filter expression provided, returning empty list"
+                )
+                return []
+            # Query the information_schema.tables view with the provided filter
+            query = f"""
+                SELECT table_schema as schema_name, table_name
+                FROM {catalog_name}.information_schema.tables
+                WHERE {schema_table_filter_expression}
+            """
+
+            self.logger.debug(f"Executing schema-table filter query: {query}")
+
+            # Execute the query using Spark
+            result_df = self.spark.sql(query).filter(
+                "table_name not like '__materialization_mat%' and table_name not like 'event_log_%'"
+            )
+            schema_table_combinations = result_df.collect()
+
+            # Convert to list of dictionaries
+            schema_tables = [
+                {"schema_name": row["schema_name"], "table_name": row["table_name"]}
+                for row in schema_table_combinations
+            ]
+
+            return schema_tables
+
+        except Exception as e:
+            self.logger.error(
+                f"Failed to get schema-table combinations using filter expression in catalog {catalog_name}: {str(e)}"
             )
             return []
 
@@ -1332,7 +1385,9 @@ class DatabricksOperations:
             Exception: If listing external locations fails or workspace_client is None
         """
         if not self.workspace_client:
-            raise Exception("WorkspaceClient is required for external location operations")
+            raise Exception(
+                "WorkspaceClient is required for external location operations"
+            )
 
         try:
             external_locations = list(self.workspace_client.external_locations.list())
@@ -1354,10 +1409,14 @@ class DatabricksOperations:
             Exception: If getting external location fails or workspace_client is None
         """
         if not self.workspace_client:
-            raise Exception("WorkspaceClient is required for external location operations")
+            raise Exception(
+                "WorkspaceClient is required for external location operations"
+            )
 
         try:
-            external_location_info = self.workspace_client.external_locations.get(location_name)
+            external_location_info = self.workspace_client.external_locations.get(
+                location_name
+            )
             return external_location_info
         except Exception as e:
             raise Exception(
@@ -1385,10 +1444,8 @@ class DatabricksOperations:
             )
 
         try:
-            created_external_location = (
-                self.workspace_client.external_locations.create(
-                    **external_location_config
-                )
+            created_external_location = self.workspace_client.external_locations.create(
+                **external_location_config
             )
             return created_external_location
         except Exception as e:
@@ -1415,10 +1472,8 @@ class DatabricksOperations:
             )
 
         try:
-            updated_external_location = (
-                self.workspace_client.external_locations.update(
-                    **external_location_config
-                )
+            updated_external_location = self.workspace_client.external_locations.update(
+                **external_location_config
             )
             return updated_external_location
         except Exception as e:

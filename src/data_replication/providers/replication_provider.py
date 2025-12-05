@@ -298,7 +298,8 @@ class ReplicationProvider(BaseProvider):
         step2_query = None
         dlt_flag = None
         attempt = 1
-        max_attempts = self.retry.max_attempts
+        max_attempts = table_config.retry.max_attempts
+        retry = table_config.retry
         actual_target_table = target_table
         source_table_type = None
 
@@ -356,7 +357,7 @@ class ReplicationProvider(BaseProvider):
                     )
 
             # Use custom retry decorator with logging
-            @retry_with_logging(self.retry, self.logger)
+            @retry_with_logging(retry, self.logger)
             def replication_operation(query: str):
                 self.logger.debug(
                     f"Executing replication query: {query}",
@@ -620,7 +621,8 @@ class ReplicationProvider(BaseProvider):
         run_id = self.run_id
 
         attempt = 1
-        max_attempts = self.retry.max_attempts
+        max_attempts = volume_config.retry.max_attempts
+        retry = volume_config.retry
         volume_type = None
         error_count = 0
 
@@ -681,14 +683,14 @@ class ReplicationProvider(BaseProvider):
                 )
 
             # Use custom retry decorator with logging
-            @retry_with_logging(self.retry, self.logger)
+            @retry_with_logging(retry, self.logger)
             def replication_operation(
                 source_path: str,
                 target_path: str,
                 run_id: str,
                 checkpoint_path: str,
                 logging_table: str,
-                max_workers: int,
+                max_concurrent_copies: int,
                 read_options: dict,
             ):
                 try:
@@ -742,7 +744,9 @@ class ReplicationProvider(BaseProvider):
                             )
 
                         # Use threading to process files
-                        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        with ThreadPoolExecutor(
+                            max_workers=max_concurrent_copies
+                        ) as executor:
                             futures = [
                                 executor.submit(process_file, row)
                                 for row in batch_df.collect()
@@ -801,7 +805,7 @@ class ReplicationProvider(BaseProvider):
                 run_id=run_id,
                 checkpoint_path=checkpoint_path,
                 logging_table=detail_ingestion_logging_table,
-                max_workers=volume_replication_config.max_concurrent_copies,
+                max_concurrent_copies=volume_replication_config.max_concurrent_copies,
                 read_options=read_options,
             )
 
@@ -1113,7 +1117,7 @@ class ReplicationProvider(BaseProvider):
         object_type = "table_tag"
         source_table = f"`{source_catalog}`.`{schema_name}`.`{table_name}`"
         target_table = f"`{target_catalog}`.`{schema_name}`.`{table_name}`"
-        max_attempts = self.retry.max_attempts
+        max_attempts = table_config.retry.max_attempts
 
         if self.source_spark.catalog.tableExists(
             source_table
@@ -1137,6 +1141,7 @@ class ReplicationProvider(BaseProvider):
                 target_catalog=target_catalog,
                 schema_name=schema_name,
                 table_name=table_name,
+                retry=table_config.retry,
             )
             run_results.append(run_result)
         else:
@@ -1190,7 +1195,7 @@ class ReplicationProvider(BaseProvider):
         object_type = "column_tag"
 
         attempt = 1
-        max_attempts = self.retry.max_attempts
+        max_attempts = table_config.retry.max_attempts
         last_exception = None
 
         run_results = []
@@ -1373,6 +1378,7 @@ class ReplicationProvider(BaseProvider):
                     schema_name=schema_name,
                     table_name=table_name,
                     column_name=column_name,
+                    retry=table_config.retry,
                 )
                 run_results.append(run_result)
 
@@ -1444,7 +1450,7 @@ class ReplicationProvider(BaseProvider):
         object_type = "volume_tag"
         source_volume = f"`{source_catalog}`.`{schema_name}`.`{volume_name}`"
         target_volume = f"`{target_catalog}`.`{schema_name}`.`{volume_name}`"
-        max_attempts = self.retry.max_attempts
+        max_attempts = volume_config.retry.max_attempts
 
         if not self.source_dbops.if_volume_exists(
             source_volume
@@ -1496,6 +1502,7 @@ class ReplicationProvider(BaseProvider):
             target_catalog=target_catalog,
             schema_name=schema_name,
             volume_name=volume_name,
+            retry=volume_config.retry,
         )
         run_results.append(run_result)
         return run_results
@@ -1522,7 +1529,7 @@ class ReplicationProvider(BaseProvider):
         source_volume_full_name = f"{source_catalog}.{schema_name}.{volume_name}"
         target_volume_full_name = f"{target_catalog}.{schema_name}.{volume_name}"
         attempt = 1
-        max_attempts = self.retry.max_attempts
+        max_attempts = volume_config.retry.max_attempts
         last_exception = None
 
         dict_for_creation = DICT_FOR_CREATION_VOLUME.copy()
@@ -1723,8 +1730,17 @@ class ReplicationProvider(BaseProvider):
             table_config: TableConfig object containing table details
         """
 
+        run_results = []
+        start_time = datetime.now(timezone.utc)
+        query = ""
+        attempt = 1
+        max_attempts = table_config.retry.max_attempts
+        retry = table_config.retry
+        last_exception = None
+        result = True
+
         # Use custom retry decorator with logging
-        @retry_with_logging(self.retry, self.logger)
+        @retry_with_logging(retry, self.logger)
         def column_comment_replication_operation(query: str):
             self.logger.debug(
                 f"Executing column comment replication query: {query}",
@@ -1732,14 +1748,6 @@ class ReplicationProvider(BaseProvider):
             )
             self.target_spark.sql(query)
             return True
-
-        run_results = []
-        start_time = datetime.now(timezone.utc)
-        query = ""
-        attempt = 1
-        max_attempts = self.retry.max_attempts
-        last_exception = None
-        result = True
 
         try:
             table_name = table_config.table_name

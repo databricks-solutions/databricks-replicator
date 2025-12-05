@@ -19,13 +19,25 @@ audit_config:
 table_types: ["external", "managed"]
 backup_config:
   enabled: true
-  share_name: "{target_catalogs.catalog_name}_share"
+  share_name: "{{catalog_name}}_share"
 replication_config:
   enabled: true
-  source_catalog: "{target_catalogs.catalog_name}_share_{source_databricks_connect_config.name}"
+  source_catalog: "{{catalog_name}}_share_{{source_name}}"
 reconciliation_config:
   enabled: true
-  source_catalog: "{target_catalogs.catalog_name}_share_{source_databricks_connect_config.name}"
+  source_catalog: "{{catalog_name}}_share_{{source_name}}"
+
+target_catalogs:
+  - catalog_name: "aaron_replication"
+    target_schemas:
+      - schema_name: "bronze_1"
+        tables:
+          - table_name: "{{schema_name}}_managed_table_1"
+          - table_name: "{{schema_name}}_managed_table_2"
+          - table_name: "external_table_1"
+            replication_config:
+          - table_name: "file_6"
+      - schema_name: "{{catalog_name}}_silver_1"
 
 concurrency:
   max_workers: 5

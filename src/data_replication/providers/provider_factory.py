@@ -89,6 +89,7 @@ class ProviderFactory:
         self.run_id = run_id or str(uuid.uuid4())
         self.db_ops = DatabricksOperations(spark, logger)
         self.db_ops_logging = DatabricksOperations(logging_spark, logger)
+        self.completed_run_results: List[RunResult] = []
 
         # Initialize AuditLogger if audit table is configured
         self.audit_logger: Optional[AuditLogger] = None
@@ -181,19 +182,6 @@ class ProviderFactory:
         else:
             raise ValueError(f"Unknown operation type: {self._operation_type}")
 
-        max_workers = 2  # default
-        timeout_seconds = 300  # default
-        if self.config.concurrency:
-            max_workers = self.config.concurrency.max_workers
-            timeout_seconds = self.config.concurrency.timeout_seconds
-
-        # Ensure we have a retry config (providers expect it to be non-None)
-        retry_config = self.config.retry
-        if retry_config is None:
-            # Use default retry config if none provided
-            from ..config.models import RetryConfig
-
-            retry_config = RetryConfig()
 
         return provider_class(
             self.spark,
@@ -204,11 +192,9 @@ class ProviderFactory:
             catalog,
             self.config.source_databricks_connect_config,
             self.config.target_databricks_connect_config,
-            retry_config,
-            max_workers,
-            timeout_seconds,
             self.config.cloud_url_mapping,
             self.audit_logger,
+            self.completed_run_results,
         )
 
     def create_summary(
@@ -358,7 +344,6 @@ class ProviderFactory:
         )
 
         try:
-            all_results = []
 
             # Check if storage credential replication is needed (only for replication operations)
             # Only check system-level uc_object_types
@@ -371,7 +356,7 @@ class ProviderFactory:
                 )
             ):
                 storage_credential_results = self._replicate_storage_credentials()
-                all_results.extend(storage_credential_results)
+                self.completed_run_results.extend(storage_credential_results)
                 if storage_credential_results:
                     self.audit_logger.log_results(storage_credential_results)
                 if UCObjectType.ALL not in self.config.uc_object_types:
@@ -379,7 +364,7 @@ class ProviderFactory:
                 # immediately return if no other object types to process
                 if len(self.config.uc_object_types) == 0:
                     summary = self.create_summary(
-                        start_time, all_results, operation_name
+                        start_time, self.completed_run_results, operation_name
                     )
                     # Log final summary
                     self.log_run_summary(summary, operation_name)
@@ -396,7 +381,7 @@ class ProviderFactory:
                 )
             ):
                 external_location_results = self._replicate_external_locations()
-                all_results.extend(external_location_results)
+                self.completed_run_results.extend(external_location_results)
                 if external_location_results:
                     self.audit_logger.log_results(external_location_results)
                 if UCObjectType.ALL not in self.config.uc_object_types:
@@ -404,7 +389,7 @@ class ProviderFactory:
                 # immediately return if no other object types to process
                 if len(self.config.uc_object_types) == 0:
                     summary = self.create_summary(
-                        start_time, all_results, operation_name
+                        start_time, self.completed_run_results, operation_name
                     )
                     # Log final summary
                     self.log_run_summary(summary, operation_name)
@@ -419,12 +404,12 @@ class ProviderFactory:
 
             if not enabled_catalogs:
                 self.logger.info(f"No catalogs configured for {operation_name}")
-                return self.create_summary(start_time, all_results, operation_name)
+                return self.create_summary(start_time, self.completed_run_results, operation_name)
 
-            catalog_results = self._run_catalog_operations(enabled_catalogs)
-            all_results.extend(catalog_results)
+            self._run_catalog_operations(enabled_catalogs)
 
-            summary = self.create_summary(start_time, all_results, operation_name)
+
+            summary = self.create_summary(start_time, self.completed_run_results, operation_name)
 
             # Log final summary
             self.log_run_summary(summary, operation_name)
@@ -894,12 +879,13 @@ class ProviderFactory:
         results = []
         operation_name = self.get_operation_name()
 
-        # Process catalogs sequentially, but use concurrency within each schema
+        # Process catalogs sequentially
         for catalog in catalogs:
             try:
                 provider = self.create_provider(catalog)
                 catalog_results = provider.process_catalog()
                 results.extend(catalog_results)
+                self.completed_run_results.extend(catalog_results)                
 
                 successful = sum(
                     1

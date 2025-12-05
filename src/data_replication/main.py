@@ -47,6 +47,7 @@ from data_replication.utils import (
     get_spark_workspace_url,
     validate_spark_session,
     get_workspace_url_from_host,
+    unwrap_retry_error,
 )
 
 
@@ -70,6 +71,7 @@ def run_backup(
         source_auth_type = config.source_databricks_connect_config.auth_type
         source_secret_config = config.source_databricks_connect_config.token
         source_cluster_id = config.source_databricks_connect_config.cluster_id
+        logger.info(f"Creating source Spark session for workspace at {source_host}")
         # create and validate Spark sessions
         spark = create_spark_session(
             source_host,
@@ -114,6 +116,7 @@ def run_replication(
         target_auth_type = config.target_databricks_connect_config.auth_type
         target_secret_config = config.target_databricks_connect_config.token
         target_cluster_id = config.target_databricks_connect_config.cluster_id
+        logger.info(f"Creating target Spark session for workspace at {target_host}")
         spark = create_spark_session(
             target_host,
             target_secret_config,
@@ -156,6 +159,7 @@ def run_reconciliation(
         target_auth_type = config.target_databricks_connect_config.auth_type
         target_secret_config = config.target_databricks_connect_config.token
         target_cluster_id = config.target_databricks_connect_config.cluster_id
+        logger.info(f"Creating target Spark session for workspace at {target_host}")
         spark = create_spark_session(
             target_host,
             target_secret_config,
@@ -261,6 +265,7 @@ def main():
             logging_secret_config = config.target_databricks_connect_config.token
             logging_cluster_id = config.target_databricks_connect_config.cluster_id
 
+        logger.info(f"Creating logging Spark session for workspace at {logging_host}")
         # create and validate logging Spark session
         logging_spark = create_spark_session(
             logging_host,
@@ -366,10 +371,10 @@ def main():
         logger.info(f"All Operations Ends {'-' * 60}")
 
     except ConfigurationError as e:
-        print(f"Configuration error: {e}", file=sys.stderr)
+        logger.error(f"Configuration error: {e}")
         return 1
     except Exception as e:
-        print(f"Operation failed: {e}", file=sys.stderr)
+        logger.error(unwrap_retry_error(e))
         return 1
 
 

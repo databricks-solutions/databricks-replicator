@@ -15,7 +15,7 @@ audit_config:
   audit_catalog_location: null
 
 # Mandatory if storage credential are replicated
-storage_credential_config: 
+storage_credential_config:
   # Mandatory if storage credential are replicated. Accepted values: aws, azure_access_connector, azure_managed_identity
   target_credential_type: "aws"
   # Mandatory if storage credential are replicated. mapping between source storage credential name and cloud principal id on target.
@@ -26,7 +26,7 @@ storage_credential_config:
 
 # Mandatory if exterrnal location, catalog, schema, tables or volumes with locations are replicated. cloud storage mapping between source and target cloud
 cloud_url_mapping:
-    "abfss://test@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/test/"
+  "abfss://test@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/test/"
 
 # Optional: External location configuration
 external_location_config:
@@ -113,7 +113,7 @@ replication_config:
   # Optional: share name of source catalog. default to <catalog_name>_to_<target_databricks_connect_config.name>_share
   share_name: "catalog_example_to_aws_share"
   # Optional: catalog created from source share. default to <catalog_name>_from_<source_databricks_connect_config.name>_shared
-  source_catalog: "catalog_example_from_azure_shared" 
+  source_catalog: "catalog_example_from_azure_shared"
   # Optional: whether to create intermediate catalog for replication. default is false.
   create_intermediate_catalog: false
   # Optional: intermediate catalog for replication. default is None.
@@ -121,10 +121,10 @@ replication_config:
   # Optional: intermediate catalog location. default is None.
   intermediate_catalog_location: null
   # Optional: whether to enforce schema during replication. default is true.
-  enforce_schema: true  
+  enforce_schema: true
 
   # uc metadata specific configurations start here: ------------------------
-  # Optional: whether to replicate predictive optimization setting during UC catalog, schema and table replication. 
+  # Optional: whether to replicate predictive optimization setting during UC catalog, schema and table replication.
   # default is false to disable PO at target to enable consistent incremental deep clone. Setting to true will replicate PO settings from source to target.
   replicate_enable_predictive_optimization: false
   # Optional: whether to overwrite tags during replication. default is true.
@@ -210,6 +210,10 @@ reconciliation_config:
   missing_data_check: true
   # Optional: threshold percentage for reconciliation pass. default is 100%.
   threshold: 100
+  # Optional: enable sampling for missing data check to improve performance. default is false.
+  enable_sampling: false
+  # Optional: number of sampling tables if sampling is enabled. default is 10.
+  no_of_sampling_tables: 10
 
 # Optional: target catalog configurations list. can be overriden by args
 target_catalogs:
@@ -222,10 +226,11 @@ target_catalogs:
     # Note: external volumes require cloud_url_mapping configuration above
     # supported volume types: managed, external.
     volume_types: ["managed", "external"]
-    # Optional: target_schema list. target_schemas takes precedence over schema_filter_expression. can be overriden by args
+    # Optional: WHERE clause condition used to filter schemas and tables in all schemas from {catalog}.information_schema.tables. config target_schemas, exclude_schemas at the same time not allowed.
+    schema_table_filter_expression: "table_name like 'fact_%' and table_schema like 'bronze_%'"
+    # Optional: target_schema list. can be overriden by args
     target_schemas:
-      # Optional: target schema name list. if not provided, all schemas are included based on schema_filter_expression or all schemas in catalog.
-      # config schema_filter_expression and target_schemas at the same time not allowed.
+      # Optional: target schema name list. if not provided, all schemas are included based on schema_table_filter_expression or all schemas in catalog.
       - schema_name: "bonze_1"
       - schema_name: "bonze_2"
         # Optional: include specific tables in the schema. if not provided, all tables are included. can be overriden by args
@@ -244,17 +249,14 @@ target_catalogs:
         exclude_volumes:
           - volume_name: "old_volume"
       - schema_name: "bonze_4"
-        # Optional: filter to select specific tables in the schema using SQL expression.
+      # Optional: WHERE clause condition to select specific tables from {catalog}.{schema}
         # config table_filter_expression and tables at the same time not allowed.
-        table_filter_expression: "tableName like 'fact_%' or tableName like 'dim_%'"
+        table_filter_expression: "table_name like 'fact_%' or table_name like 'dim_%'"
     # Optional: exclude_schema list.
     exclude_schemas:
       # Optional: exclude specific schemas in the catalog.
       - schema_name: "bonze_exclude_1"
       - schema_name: "bonze_exclude_2"
-    # Optional: filter to select specific schemas.
-    # config schema_filter_expression and target_schemas at the same time not allowed.
-    schema_filter_expression: "databaseName like 'bonze_%'"
     # Optional: backup configuration (at catalog level, overrides replication group level config)
     backup_config:
     # check config at replication group level
@@ -267,8 +269,10 @@ target_catalogs:
 
 # Optional: Concurrency settings
 concurrency:
-  # Optional: maximum number of concurrent tasks. default is 4. can be overridden by args
-  max_workers: 4
+  # Optional: no of parallel threads for table and volume replication in a schema. default is 8.
+  max_workers: 8
+  # Optional: no of parallel threads for table filtering in a schema. default is 8.
+  parallel_table_filter: 8
   # Optional: timeout for each task. default is 3600.
   timeout_seconds: 3600
 

@@ -272,7 +272,7 @@ class BackupProvider(BaseProvider):
         source_table_type = None
         unset_query = None
         attempt = 1
-        max_attempts = self.retry.max_attempts
+        max_attempts = table_config.retry.max_attempts
 
         try:
             table_details = self.db_ops.get_table_details(source_table)
@@ -305,7 +305,7 @@ class BackupProvider(BaseProvider):
                 unset_query = "SELECT 'skipping unset operation.'"
 
             # Use custom retry decorator with logging
-            @retry_with_logging(self.retry, self.logger)
+            @retry_with_logging(table_config.retry, self.logger)
             def backup_operation(backup_query: str, unset_query: str):
                 self.logger.debug(
                     f"Executing backup query: {backup_query}",

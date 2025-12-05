@@ -10,10 +10,12 @@ import os
 import time
 from functools import wraps
 from typing import Dict, Any, TypeVar, Optional
-from tenacity import retry, wait_exponential, stop_after_attempt
+from enum import Enum
+from tenacity import RetryError, retry, wait_exponential, stop_after_attempt
 from pydantic import BaseModel
 from databricks.connect import DatabricksSession
 from databricks.sdk import WorkspaceClient
+
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -357,9 +359,7 @@ def merge_models_recursive(
     return base_model
 
 
-def map_cloud_url(
-    source_storage_root: str, cloud_url_mapping: dict
-) -> Optional[str]:
+def map_cloud_url(source_storage_root: str, cloud_url_mapping: dict) -> Optional[str]:
     """
     Map a source storage root to a target storage root using external location mapping.
 
@@ -407,3 +407,80 @@ def map_user(source_user: str, user_mapping: dict) -> Optional[str]:
         if src_user == source_user:
             return tgt_user
     return source_user
+
+
+def recursive_substitute(obj, substitute_value, target_pattern=""):
+    """
+    Recursively substitute all occurrences of target_pattern in strings with substitute_value.
+
+    Args:
+        obj: The object to process (dict, BaseModel, list, or primitive)
+        substitute_value: The value to substitute target_pattern with
+        target_pattern: The pattern to search for and replace (default: "value_1")
+
+    Returns:
+        The processed object with substitutions made
+    """
+    if obj is None:
+        return obj
+
+    if isinstance(obj, Enum):
+        # Don't modify enum values - return as-is
+        return obj
+
+    if isinstance(obj, str):
+        return obj.replace(target_pattern, str(substitute_value))
+
+    if isinstance(obj, BaseModel):
+        # Create a new instance with substituted values
+        # model_dict_all = obj.model_dump()
+        # model_dict_field_set = {
+        #     k: v for k, v in model_dict_all.items() if k in obj.model_fields_set
+        # }
+        for field_name, field_value in obj:
+            if field_name in obj.model_fields_set:
+                setattr(
+                    obj,
+                    field_name,
+                    recursive_substitute(field_value, substitute_value, target_pattern),
+                )
+            continue
+        return obj
+
+    if isinstance(obj, dict):
+        return {
+            key: recursive_substitute(value, substitute_value, target_pattern)
+            for key, value in obj.items()
+        }
+
+    if isinstance(obj, list):
+        return [
+            recursive_substitute(item, substitute_value, target_pattern) for item in obj
+        ]
+
+    if isinstance(obj, tuple):
+        return tuple(
+            recursive_substitute(item, substitute_value, target_pattern) for item in obj
+        )
+
+    # Return primitive types as-is (int, float, bool, etc.)
+    return obj
+
+def unwrap_retry_error(error: Exception) -> str:
+    """
+    Unwrap RetryError to get the actual underlying exception message.
+    
+    Args:
+        error: The exception to unwrap
+        
+    Returns:
+        String representation of the underlying error
+    """
+    if isinstance(error, RetryError):
+        # Get the last attempt's exception
+        if hasattr(error, 'last_attempt') and error.last_attempt:
+            if hasattr(error.last_attempt, 'exception'):
+                return str(error.last_attempt.exception())
+            elif hasattr(error.last_attempt, 'result'):
+                return str(error.last_attempt.result())
+    return str(error)

@@ -88,3 +88,5 @@ DICT_FOR_UPDATE_VOLUME = {
     "full_name": None,
     "comment": None,
 }
+
+SKIP_PROCESSED_TABLES = True
