@@ -271,7 +271,7 @@ class DatabricksOperations:
 
             # Collect results as they complete
             for future in as_completed(future_to_table):
-                table_name, is_included = future.result()
+                table_name, is_included = future.result(timeout=60)
                 if is_included:
                     filtered_tables.append(table_name)
         executor.shutdown(wait=True)
