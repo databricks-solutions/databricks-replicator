@@ -23,35 +23,10 @@ audit_config:
 replication_config:
   enabled: true
 
-# target_catalogs:
-#   - catalog_name: "aaron_replication"
-#     replication_config:
-#       overwrite_comments: true
-#       overwrite_tags: false
-#     target_schemas:
-#       - schema_name: "bronze_1"
-#         replication_config:
-#           overwrite_comments: false
-#         tables:
-#           - table_name: "managed_table_1"
-#             replication_config:
-#               overwrite_tags: true
-#           - table_name: "managed_table_2"
-#             replication_config:
-#               overwrite_comments: true
-#           - table_name: "external_table_1"
-#             replication_config:
-#               overwrite_comments: false
-#               overwrite_tags: true
-#           - table_name: "file_6"
-#       - schema_name: "silver_1"
-#         replication_config:
-#           overwrite_tags: true
-
 concurrency:
   max_workers: 5
   timeout_seconds: 1800
 
 retry:
-  max_attempts: 2
-  retry_delay_seconds: 3
+  max_attempts: 3
+  retry_delay_seconds: 10

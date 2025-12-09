@@ -224,19 +224,37 @@ def main():
             logging_level_override=args.logging_level,
             source_host_override=args.source_host,
             target_host_override=args.target_host,
-            volume_max_concurrent_copies_override=getattr(args, 'volume_max_concurrent_copies', None),
-            volume_delete_and_reload_override=getattr(args, 'volume_delete_and_reload', None),
-            volume_folder_path_override=getattr(args, 'volume_folder_path', None),
-            volume_delete_checkpoint_override=getattr(args, 'volume_delete_checkpoint', None),
-            volume_autoloader_options_override=getattr(args, 'volume_autoloader_options', None),
-            volume_streaming_timeout_secs_override=getattr(args, 'volume_streaming_timeout_secs', None),
-            environment_name=getattr(args, 'environment', None),
-            env_path=getattr(args, 'env_path', None),
+            volume_max_concurrent_copies_override=getattr(
+                args, "volume_max_concurrent_copies", None
+            ),
+            volume_delete_and_reload_override=getattr(
+                args, "volume_delete_and_reload", None
+            ),
+            volume_folder_path_override=getattr(args, "volume_folder_path", None),
+            volume_delete_checkpoint_override=getattr(
+                args, "volume_delete_checkpoint", None
+            ),
+            volume_autoloader_options_override=getattr(
+                args, "volume_autoloader_options", None
+            ),
+            volume_streaming_timeout_secs_override=getattr(
+                args, "volume_streaming_timeout_secs", None
+            ),
+            environment_name=getattr(args, "environment", None),
+            env_path=getattr(args, "env_path", None),
         )
         logger = create_logger(config)
 
         logger.info(f"Loaded configuration from {config_path}")
 
+    except ConfigurationError as e:
+        print(f"Configuration error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Unexpected error during configuration loading: {e}", file=sys.stderr)
+        return 1
+
+    try:
         if args.validate_only:
             logger.info("Configuration validation completed successfully")
             return 0

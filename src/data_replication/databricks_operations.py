@@ -229,7 +229,7 @@ class DatabricksOperations:
         catalog_name: str,
         schema_name: str,
         table_names: List[str],
-        table_types: List[TableType],
+        table_types: List[str],
         parallel_table_filter: int = 8,
     ) -> List[str]:
         """
@@ -246,29 +246,15 @@ class DatabricksOperations:
             List of table names that are of the selected types
         """
 
-        if table_types is None or len(table_types) == 0:
-            return table_names
-
-        if len(table_names) == 0:
+        if table_types is None or len(table_types) == 0 or len(table_names) == 0:
             return []
-
-        # Handle ALL table type by expanding to all concrete table types
-        expanded_types = []
-        for table_type in table_types:
-            if table_type.lower() == "all":
-                expanded_types.extend(["managed", "streaming_table", "external"])
-            else:
-                expanded_types.append(table_type.lower())
-
-        # Remove duplicates while preserving order
-        allowed_types = list(dict.fromkeys(expanded_types))
 
         def check_table_type(table_name: str) -> tuple[str, bool]:
             """Check if table type is in allowed types"""
             try:
                 full_table_name = f"`{catalog_name}`.`{schema_name}`.`{table_name}`"
                 table_type = self.get_table_type(full_table_name).lower()
-                return table_name, table_type in allowed_types
+                return table_name, table_type in table_types
             except Exception:
                 # If we can't determine the type, exclude the table
                 return table_name, False
@@ -285,10 +271,10 @@ class DatabricksOperations:
 
             # Collect results as they complete
             for future in as_completed(future_to_table):
-                table_name, is_included = future.result()
+                table_name, is_included = future.result(timeout=60)
                 if is_included:
                     filtered_tables.append(table_name)
-
+        executor.shutdown(wait=True)
         return filtered_tables
 
     def get_all_schemas(self, catalog_name: str) -> List[str]:
@@ -912,7 +898,7 @@ class DatabricksOperations:
         catalog_name: str,
         schema_name: str,
         volume_names: List[str],
-        volume_types: List[VolumeType],
+        volume_types: List[str],
     ) -> List[str]:
         """
         Filter a list of volume names to only include selected types.
@@ -927,12 +913,8 @@ class DatabricksOperations:
             List of volume names that are of the selected types
         """
 
-        if (
-            volume_types is None
-            or len(volume_types) == 0
-            or UCObjectType.ALL in volume_types
-        ):
-            return volume_names
+        if volume_types is None or len(volume_types) == 0:
+            return []
         return [
             volume
             for volume in volume_names
@@ -1478,3 +1460,21 @@ class DatabricksOperations:
             return updated_external_location
         except Exception as e:
             raise Exception(f"Failed to update external location: {str(e)}") from e
+
+    def show_create_table_ddl(self, table_name: str) -> str:
+        """
+        Get the CREATE TABLE DDL statement for a given table.
+
+        Args:
+            table_name: Full table name (catalog.schema.table)
+        Returns:
+            CREATE TABLE DDL statement as a string
+        """
+        try:
+            ddl_df = self.spark.sql(f"SHOW CREATE TABLE {table_name}")
+            ddl_statement = "\n".join(row["createtab_stmt"] for row in ddl_df.collect())
+            return ddl_statement
+        except Exception as e:
+            raise Exception(
+                f"Failed to get CREATE TABLE DDL for {table_name}: {str(e)}"
+            ) from e

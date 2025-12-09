@@ -17,6 +17,7 @@ from ..utils import (
     get_workspace_url_from_host,
     retry_with_logging,
     validate_spark_session,
+    recursive_substitute,
 )
 from .base_provider import BaseProvider
 
@@ -134,22 +135,25 @@ class BackupProvider(BaseProvider):
 
         return backup_config.source_catalog
 
-    def process_schema_concurrently(
+    def process_schema(
         self,
         schema_config: SchemaConfig,
-    ) -> List[RunResult]:
+    ):
         """Override to add backup-specific schema setup."""
         backup_config = schema_config.backup_config
 
         # Ensure schema exists in backup catalog before processing
         if backup_config.backup_catalog:
             self.db_ops.create_schema_if_not_exists(
-                backup_config.backup_catalog, self.get_backup_schema_name(schema_config.schema_name, backup_config)
+                backup_config.backup_catalog,
+                self.get_backup_schema_name(schema_config.schema_name, backup_config),
             )
 
         results = []
         if backup_config.add_to_share:
-            schema_share_result = self._add_schema_to_shares(schema_config.schema_name, backup_config)
+            schema_share_result = self._add_schema_to_shares(
+                schema_config.schema_name, backup_config
+            )
             results.append(schema_share_result)
 
         if (
@@ -161,11 +165,15 @@ class BackupProvider(BaseProvider):
             )
             return results
 
-        table_results = super().process_schema_concurrently(
-            schema_config
+        # Set table types to only streaming tables for backup
+        schema_config.table_types = [TableType.STREAMING_TABLE]
+        self.logger.info(
+            f"""Processing streaming tables only for in schema {schema_config.schema_name}."""
         )
+        schema_tables = []
+        table_results, schema_tables, _ = super().process_schema(schema_config)
         results.extend(table_results)
-        return results
+        return results, schema_tables, []
 
     def _add_schema_to_shares(self, schema_name: str, backup_config) -> RunResult:
         """Add schema to delta shares and return a RunResult for the operation."""
@@ -231,12 +239,18 @@ class BackupProvider(BaseProvider):
             max_attempts=max_attempts,
         )
 
-    def process_table(self, schema_config: SchemaConfig, table_config: TableConfig) -> List[RunResult]:
+    def process_table(
+        self, schema_config: SchemaConfig, table_config: TableConfig
+    ) -> List[RunResult]:
         """Process a single table for backup."""
+        # Substitute table name in table config
+        table_config = recursive_substitute(
+            table_config, table_config.table_name, "{{table_name}}"
+        )
         results = []
         result = self._backup_table(schema_config, table_config)
         if result:
-            results.append(result)
+            results.extend(result)
             self.audit_logger.log_results(results)
         return results
 
@@ -244,7 +258,7 @@ class BackupProvider(BaseProvider):
         self,
         schema_config: SchemaConfig,
         table_config: TableConfig,
-    ) -> RunResult:
+    ) -> List[RunResult]:
         """
         Backup a single table using deep clone.
 
@@ -333,28 +347,30 @@ class BackupProvider(BaseProvider):
                     extra={"run_id": self.run_id, "operation": "backup"},
                 )
 
-                return RunResult(
-                    operation_type="backup",
-                    catalog_name=source_catalog,
-                    schema_name=schema_name,
-                    object_name=table_name,
-                    object_type="table",
-                    status="success",
-                    start_time=start_time.isoformat(),
-                    end_time=end_time.isoformat(),
-                    duration_seconds=duration,
-                    details={
-                        "backup_table": backup_table,
-                        "backup_schema_name": backup_schema_name,
-                        "source_table": actual_source_table,
-                        "table_type": source_table_type,
-                        "backup_query": backup_query,
-                        "backup_schema_prefix": backup_config.backup_schema_prefix,
-                        "dlt_flag": dlt_flag,
-                    },
-                    attempt_number=attempt,
-                    max_attempts=max_attempts,
-                )
+                return [
+                    RunResult(
+                        operation_type="backup",
+                        catalog_name=source_catalog,
+                        schema_name=schema_name,
+                        object_name=table_name,
+                        object_type="table",
+                        status="success",
+                        start_time=start_time.isoformat(),
+                        end_time=end_time.isoformat(),
+                        duration_seconds=duration,
+                        details={
+                            "backup_table": backup_table,
+                            "backup_schema_name": backup_schema_name,
+                            "source_table": actual_source_table,
+                            "table_type": source_table_type,
+                            "backup_query": backup_query,
+                            "backup_schema_prefix": backup_config.backup_schema_prefix,
+                            "dlt_flag": dlt_flag,
+                        },
+                        attempt_number=attempt,
+                        max_attempts=max_attempts,
+                    )
+                ]
 
             error_msg = (
                 f"Backup failed after {max_attempts} attempts: "
@@ -368,29 +384,31 @@ class BackupProvider(BaseProvider):
                 extra={"run_id": self.run_id, "operation": "backup"},
             )
 
-            return RunResult(
-                operation_type="backup",
-                catalog_name=source_catalog,
-                schema_name=schema_name,
-                object_name=table_name,
-                object_type="table",
-                status="failed",
-                start_time=start_time.isoformat(),
-                end_time=end_time.isoformat(),
-                duration_seconds=duration,
-                error_message=error_msg,
-                details={
-                    "backup_table": backup_table,
-                    "backup_schema_name": backup_schema_name,
-                    "source_table": actual_source_table,
-                    "table_type": source_table_type,
-                    "backup_query": backup_query,
-                    "backup_schema_prefix": backup_config.backup_schema_prefix,
-                    "dlt_flag": dlt_flag,
-                },
-                attempt_number=attempt,
-                max_attempts=max_attempts,
-            )
+            return [
+                RunResult(
+                    operation_type="backup",
+                    catalog_name=source_catalog,
+                    schema_name=schema_name,
+                    object_name=table_name,
+                    object_type="table",
+                    status="failed",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    error_message=error_msg,
+                    details={
+                        "backup_table": backup_table,
+                        "backup_schema_name": backup_schema_name,
+                        "source_table": actual_source_table,
+                        "table_type": source_table_type,
+                        "backup_query": backup_query,
+                        "backup_schema_prefix": backup_config.backup_schema_prefix,
+                        "dlt_flag": dlt_flag,
+                    },
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+            ]
 
         except Exception as e:
             end_time = datetime.now(timezone.utc)
@@ -406,26 +424,28 @@ class BackupProvider(BaseProvider):
                 extra={"run_id": self.run_id, "operation": "backup"},
             )
 
-            return RunResult(
-                operation_type="backup",
-                catalog_name=source_catalog,
-                schema_name=schema_name,
-                object_name=table_name,
-                object_type="table",
-                status="failed",
-                start_time=start_time.isoformat(),
-                end_time=end_time.isoformat(),
-                duration_seconds=duration,
-                error_message=error_msg,
-                details={
-                    "backup_table": backup_table,
-                    "backup_schema_name": backup_schema_name,
-                    "source_table": actual_source_table,
-                    "table_type": source_table_type,
-                    "backup_query": backup_query,
-                    "backup_schema_prefix": backup_config.backup_schema_prefix,
-                    "dlt_flag": dlt_flag,
-                },
-                attempt_number=attempt,
-                max_attempts=max_attempts,
-            )
+            return [
+                RunResult(
+                    operation_type="backup",
+                    catalog_name=source_catalog,
+                    schema_name=schema_name,
+                    object_name=table_name,
+                    object_type="table",
+                    status="failed",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    error_message=error_msg,
+                    details={
+                        "backup_table": backup_table,
+                        "backup_schema_name": backup_schema_name,
+                        "source_table": actual_source_table,
+                        "table_type": source_table_type,
+                        "backup_query": backup_query,
+                        "backup_schema_prefix": backup_config.backup_schema_prefix,
+                        "dlt_flag": dlt_flag,
+                    },
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+            ]

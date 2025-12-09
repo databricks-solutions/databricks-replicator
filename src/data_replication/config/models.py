@@ -55,9 +55,10 @@ class ConcurrencyConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    process_schemas_in_serial: bool = Field(default=False)
     max_workers: int = Field(default=8, ge=1, le=64)
     parallel_table_filter: int = Field(default=8, ge=1, le=64)
-    timeout_seconds: int = Field(default=3600, ge=60)
+    timeout_seconds: int = Field(default=1800, ge=60)
 
 
 class RetryConfig(BaseModel):
@@ -77,11 +78,11 @@ class UCObjectType(str, Enum):
     SCHEMA = "schema"
     SCHEMA_TAG = "schema_tag"
     VIEW = "view"
-    VIEW_TAG = "view_tag"
     VOLUME = "volume"
     VOLUME_TAG = "volume_tag"
     TABLE_TAG = "table_tag"
     COLUMN_TAG = "column_tag"
+    TABLE_COMMENT = "table_comment"
     COLUMN_COMMENT = "column_comment"
     STORAGE_CREDENTIAL = "storage_credential"
     EXTERNAL_LOCATION = "external_location"
@@ -567,6 +568,40 @@ class ReplicationSystemConfig(BaseModel):
                     TableType.EXTERNAL,
                     TableType.STREAMING_TABLE,
                 ]
+            for schema in catalog.target_schemas or []:
+                # Expand schema-level table_types if it contains "all"
+                if schema.table_types and TableType.ALL in schema.table_types:
+                    schema.table_types = [
+                        TableType.MANAGED,
+                        TableType.EXTERNAL,
+                        TableType.STREAMING_TABLE,
+                    ]
+        return self
+
+    @model_validator(mode="after")
+    def set_volume_types(self):
+        """Set default volume types and expand 'all' type"""
+        # Expand system-level volume_types if it contains "all"
+        if self.volume_types and VolumeType.ALL in self.volume_types:
+            self.volume_types = [
+                VolumeType.MANAGED,
+                VolumeType.EXTERNAL,
+            ]
+
+        for catalog in self.target_catalogs:
+            # Expand catalog-level volume_types if it contains "all"
+            if catalog.volume_types and VolumeType.ALL in catalog.volume_types:
+                catalog.volume_types = [
+                    VolumeType.MANAGED,
+                    VolumeType.EXTERNAL,
+                ]
+            for schema in catalog.target_schemas or []:
+                # Expand schema-level volume_types if it contains "all"
+                if schema.volume_types and VolumeType.ALL in schema.volume_types:
+                    schema.volume_types = [
+                        VolumeType.MANAGED,
+                        VolumeType.EXTERNAL,
+                    ]
         return self
 
     @model_validator(mode="after")
@@ -824,16 +859,6 @@ class ReplicationSystemConfig(BaseModel):
                     f"Found: {', '.join(schema_selection_methods)}"
                 )
 
-            # Validate table_filter_expression usage within target_schemas
-            if catalog.target_schemas:
-                for schema in catalog.target_schemas:
-                    if schema.table_filter_expression and schema.tables:
-                        raise ValueError(
-                            f"""
-                            'table_filter_expression' and 'tables' must not be provided at the same time in schema: {schema.schema_name} of catalog: {catalog.catalog_name}
-                    """
-                        )
-
             # Validate streaming table constraints
             has_streaming_table = (
                 catalog.table_types and TableType.STREAMING_TABLE in catalog.table_types
@@ -857,6 +882,32 @@ class ReplicationSystemConfig(BaseModel):
                     backup_catalog should only be set for streaming table configurations in catalog: {catalog.catalog_name}
                     """
                 )
+
+            # Validate table_filter_expression usage within target_schemas
+            if catalog.target_schemas:
+                for schema in catalog.target_schemas:
+                    if schema.table_filter_expression and schema.tables:
+                        raise ValueError(
+                            f"""
+                            'table_filter_expression' and 'tables' must not be provided at the same time in schema: {schema.schema_name} of catalog: {catalog.catalog_name}
+                    """
+                        )
+                    # Ensure only one object type is specified
+                    object_types_provided = []
+                    if schema.table_types and len(schema.table_types) > 0:
+                        object_types_provided.append("table_types")
+                    if schema.volume_types and len(schema.volume_types) > 0:
+                        object_types_provided.append("volume_types")
+                    if (
+                        schema.uc_object_types
+                        and len(schema.uc_object_types) > 0
+                    ):
+                        object_types_provided.append("uc_object_types")
+
+                    if len(object_types_provided) > 1:
+                        raise ValueError(
+                            f"exactly one of table_types, uc_object_types and volume_types must be provided in schema: {schema.schema_name}"
+                        )
 
         return self
 

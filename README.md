@@ -21,11 +21,11 @@ This system provides incremental data and UC metadata replication capabilities b
   - Catalogs
   - Schemas
   - Volumes
+  - Views
   - Tags (catalog, schema, table, columns, views, volume)
-  - Column Comments 
+  - Column Comments
 ### In Development
 - UC metadata
-  - Views
   - Permissions
   - Materialized Views
 
@@ -167,7 +167,7 @@ data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --uc-object-ty
 # Replicate materialized views for specific catalogs (Not yet supported - WIP)
 data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --uc-object-types materialized_view --target-catalogs catalog1,catalog2,catalog3 
 
-# Replicate views for specific catalogs (Not yet supported - WIP)
+# Replicate views for specific catalogs
 data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --uc-object-types view --target-catalogs catalog1,catalog2,catalog3
 
 # Replicate tags & comments

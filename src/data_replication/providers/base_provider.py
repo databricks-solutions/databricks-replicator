@@ -37,6 +37,7 @@ from ..config.models import (
     RunResult,
     SchemaConfig,
     TableConfig,
+    TableType,
     TargetCatalogConfig,
     UCObjectType,
     VolumeConfig,
@@ -73,7 +74,7 @@ class BaseProvider(ABC):
         target_databricks_config: DatabricksConnectConfig,
         cloud_url_mapping: Optional[dict] = None,
         audit_logger: Optional[AuditLogger] = None,
-        completed_run_results: Optional[List[RunResult]] = [],
+        completed_run_results: Optional[List[RunResult]] = None,
     ):
         """
         Initialize the base provider.
@@ -128,7 +129,7 @@ class BaseProvider(ABC):
         object_name: str = "",
         object_type: str = "table",
         start_time: datetime = None,
-    ) -> RunResult:
+    ) -> List[RunResult]:
         """
         Handle exceptions consistently across all operations.
 
@@ -169,7 +170,9 @@ class BaseProvider(ABC):
         )
 
     @abstractmethod
-    def process_table(self, schema_config: SchemaConfig, table_config: TableConfig):
+    def process_table(
+        self, schema_config: SchemaConfig, table_config: TableConfig
+    ) -> List[RunResult]:
         """
         Process a single table.
         Must be implemented by subclasses.
@@ -182,7 +185,9 @@ class BaseProvider(ABC):
             RunResult object for the operation
         """
 
-    def process_volume(self, schema_config: SchemaConfig, volume_config: VolumeConfig):
+    def process_volume(
+        self, schema_config: SchemaConfig, volume_config: VolumeConfig
+    ) -> List[RunResult]:
         """
         Process a single volume.
         Default implementation returns a success result.
@@ -233,6 +238,8 @@ class BaseProvider(ABC):
 
         results = []
         start_time = datetime.now(timezone.utc)
+        schema_table_list = []
+        schema_volume_list = []
 
         try:
             # Setup operation-specific catalogs (implemented by subclasses)
@@ -284,22 +291,24 @@ class BaseProvider(ABC):
                 if len(uc_object_types_catalog_processed) == 0:
                     return results
 
-            # construct schema_table_filter_expression from target_schemas to sample across all tables
-            if (
+            # Handle schema-table filter expression if configured or sampling is enabled
+            if self.catalog_config.schema_table_filter_expression or (
                 self.catalog_config.reconciliation_config
                 and self.catalog_config.reconciliation_config.enable_sampling
-                and not self.catalog_config.schema_table_filter_expression
+                and self.get_operation_name() == "reconciliation"
             ):
-                self.catalog_config.schema_table_filter_expression = (
+                # construct schema_table_filter_expression from config
+                schema_table_filter_expression = (
                     self._build_schema_table_filter_expression()
                 )
-
-            # Handle schema-table filter expression if configured
-            if self.catalog_config.schema_table_filter_expression:
+                self.logger.debug(
+                    f"Constructed schema_table_filter_expression: {schema_table_filter_expression}"
+                )
                 # Get schema-table combinations to process based on filter expression
-                schema_table_combinations = self._get_schema_tables()
-
-                # sample tables across schemas only if sampling is enabled
+                schema_table_combinations = self._get_schema_tables(
+                    schema_table_filter_expression=schema_table_filter_expression
+                )
+                # Apply sampling if enabled
                 if (
                     self.catalog_config.reconciliation_config
                     and self.catalog_config.reconciliation_config.enable_sampling
@@ -379,7 +388,7 @@ class BaseProvider(ABC):
                         "operation": self.get_operation_name(),
                     },
                 )
-
+                # Substitute schema name in schema config
                 schema_config = recursive_substitute(
                     schema_config, schema_config.schema_name, "{{schema_name}}"
                 )
@@ -422,21 +431,71 @@ class BaseProvider(ABC):
                     if len(uc_object_types_schema_processed) == 0:
                         continue
 
-                schema_results = self.process_schema_concurrently(schema_config)
+                # Process all tables and volumes in the schema
+                schema_results = []
+                schema_tables = []
+                schema_volumes = []
+                schema_results, schema_tables, schema_volumes = self.process_schema(
+                    schema_config
+                )
                 results.extend(schema_results)
+                schema_table_list.extend(schema_tables)
+                schema_volume_list.extend(schema_volumes)
 
-                # Log summary info to regular logger
-                successful = sum(
-                    1
-                    for r in schema_results
-                    if schema_results and r.status == "success"
-                )
-                total = len(schema_results) if schema_results else 0
+                if schema_results:
+                    # Log summary info to regular logger
+                    successful = sum(
+                        1
+                        for r in schema_results
+                        if schema_results and r.status == "success"
+                    )
+                    total = len(schema_results) if schema_results else 0
 
-                self.logger.info(
-                    f"Completed {self.get_operation_name()} for schema {self.catalog_name}.{schema_config.schema_name}: "
-                    f"{successful}/{total} operations successful"
-                )
+                    self.logger.info(
+                        f"Completed {self.get_operation_name()} for schema {self.catalog_name}.{schema_config.schema_name}: "
+                        f"{successful}/{total} operations successful"
+                    )
+
+            if not self.catalog_config.concurrency.process_schemas_in_serial:
+                catalog_run_result = []
+                if schema_table_list:
+                    catalog_run_result = self._process_schema_tables(
+                        schema_table_list, self.catalog_name, start_time
+                    )
+                    if catalog_run_result:
+                        results.extend(catalog_run_result)
+                        # Log summary info to regular logger
+                        successful = sum(
+                            1
+                            for r in catalog_run_result
+                            if catalog_run_result and r.status == "success"
+                        )
+                        total = len(catalog_run_result) if catalog_run_result else 0
+
+                        self.logger.info(
+                            f"Completed table {self.get_operation_name()} for catalog {self.catalog_name}: "
+                            f"{successful}/{total} operations successful"
+                        )
+                
+                if schema_volume_list:
+                    catalog_run_result = self._process_schema_volumes(
+                        schema_volume_list, self.catalog_name, start_time
+                    )
+                    catalog_run_result = []
+                    if catalog_run_result:
+                        results.extend(catalog_run_result)
+                        # Log summary info to regular logger
+                        successful = sum(
+                            1
+                            for r in catalog_run_result
+                            if catalog_run_result and r.status == "success"
+                        )
+                        total = len(catalog_run_result) if catalog_run_result else 0
+
+                        self.logger.info(
+                            f"Completed volume {self.get_operation_name()} for catalog {self.catalog_name}: "
+                            f"{successful}/{total} operations successful"
+                        )
 
         except Exception as e:
             result = self._handle_exception(
@@ -452,10 +511,10 @@ class BaseProvider(ABC):
 
         return results
 
-    def process_schema_concurrently(
+    def process_schema(
         self,
         schema_config: SchemaConfig,
-    ) -> List[RunResult]:
+    ):
         """
         Process all tables first, then volumes in a schema using ThreadPoolExecutor.
 
@@ -471,6 +530,8 @@ class BaseProvider(ABC):
         catalog_name = self.catalog_config.catalog_name
         start_time = datetime.now(timezone.utc)
         self.logger.debug(f"Processing with config: {self.catalog_config}")
+        schema_table_list = []
+        schema_volume_list = []
         try:
             total_objects = 0
             table_configs = []
@@ -483,7 +544,7 @@ class BaseProvider(ABC):
                     or UCObjectType.ALL in self.catalog_config.uc_object_types
                     or UCObjectType.COLUMN_TAG in self.catalog_config.uc_object_types
                     or UCObjectType.COLUMN_COMMENT
-                    in self.catalog_config.uc_object_types
+                    or UCObjectType.VIEW in self.catalog_config.uc_object_types
                 )
             ) or self.catalog_config.table_types:
                 table_configs = self._get_tables(schema_config, schema_config.tables)
@@ -502,7 +563,7 @@ class BaseProvider(ABC):
                 self.logger.info(
                     f"No objects found in schema {self.catalog_name}.{schema_config.schema_name}. Skipping."
                 )
-                return results
+                return results, schema_table_list, schema_volume_list
 
             # Process all tables first
             if table_configs:
@@ -511,11 +572,18 @@ class BaseProvider(ABC):
                     table_configs[i] = merge_models_recursive(
                         deepcopy(schema_config), table_config
                     )
+                    schema_table_list.append(
+                        {
+                            "schema_config": schema_config,
+                            "table_config": table_configs[i],
+                        }
+                    )
 
-                table_results = self._process_tables(
-                    schema_config, table_configs, catalog_name, start_time
-                )
-                results.extend(table_results)
+                if self.catalog_config.concurrency.process_schemas_in_serial:
+                    table_results = self._process_tables(
+                        schema_config, table_configs, catalog_name, start_time
+                    )
+                    results.extend(table_results)
 
             # Process all volumes after tables are complete
             if volume_configs:
@@ -524,11 +592,17 @@ class BaseProvider(ABC):
                     volume_configs[i] = merge_models_recursive(
                         deepcopy(schema_config), volume_config
                     )
-                volume_results = self._process_volumes(
-                    schema_config, volume_configs, catalog_name, start_time
-                )
-                results.extend(volume_results)
-
+                    schema_volume_list.append(
+                        {
+                            "schema_config": schema_config,
+                            "volume_config": volume_configs[i],
+                        }
+                    )
+                if self.catalog_config.concurrency.process_schemas_in_serial:
+                    volume_results = self._process_volumes(
+                        schema_config, volume_configs, catalog_name, start_time
+                    )
+                    results.extend(volume_results)
         except Exception as e:
             result = self._handle_exception(
                 e,
@@ -539,8 +613,149 @@ class BaseProvider(ABC):
                 "schema",
                 start_time,
             )
-            results.append(result)
+            results.extend(result)
+        return results, schema_table_list, schema_volume_list
 
+    def _process_schema_tables(
+        self,
+        schema_table_list: List[dict],
+        catalog_name: str,
+        start_time: datetime,
+    ) -> List[RunResult]:
+        """
+        Process all tables in a schema using ThreadPoolExecutor.
+
+        Args:
+            schema_table_list: List of dictionaries with 'schema_config' and 'table_config' keys
+            catalog_name: Catalog name for error handling
+            start_time: Operation start time for error handling
+        Returns:
+            List of RunResult objects for each table operation
+        """
+        results: List[RunResult] = []
+        concurrency = self.catalog_config.concurrency
+        self.logger.info(
+            f"starting {self.get_operation_name()} of {len(schema_table_list)} tables in catalog {self.catalog_name} using {concurrency.max_workers} workers"
+        )
+        self.logger.debug(
+            f"Tables: {[f'{item['schema_config'].schema_name}.{item['table_config'].table_name}' for item in schema_table_list]}"
+        )
+
+        with ThreadPoolExecutor(max_workers=concurrency.max_workers) as executor:
+            # Submit table processing jobs
+            future_to_table = {
+                executor.submit(
+                    self.process_table, item["schema_config"], item["table_config"]
+                ): (item["schema_config"].schema_name, item["table_config"].table_name)
+                for item in schema_table_list
+            }
+
+            # Collect table results
+            for future in as_completed(future_to_table):
+                schema_name, table_name = future_to_table[future]
+                try:
+                    result = []
+                    result = future.result(timeout=self.timeout_seconds)
+
+                    results.extend(result)
+                    # Check if any result in the list failed
+                    for single_result in result:
+                        if single_result.status != "success":
+                            self.logger.error(
+                                f"Failed to process table "
+                                f"{catalog_name}.{schema_name}.{table_name}: "
+                                f"{single_result.error_message}"
+                            )
+                except Exception as e:
+                    result = self._handle_exception(
+                        e,
+                        "processing table",
+                        catalog_name,
+                        schema_name,
+                        table_name,
+                        "table",
+                        start_time,
+                    )
+                    results.extend(result)
+                finally:
+                    self.processed_objects.append(f"{schema_name}.{table_name}")
+
+        executor.shutdown(wait=True)
+
+        self.logger.info(f"All tables processed in catalog {self.catalog_name}")
+        return results
+
+    def _process_schema_volumes(
+        self,
+        schema_volume_list: List[dict],
+        catalog_name: str,
+        start_time: datetime,
+    ) -> List[RunResult]:
+        """
+        Process all volumes in a schema using ThreadPoolExecutor.
+
+        Args:
+            schema_volume_list: List of dictionaries with 'schema_config' and 'volume_config' keys
+            catalog_name: Catalog name for error handling
+            start_time: Operation start time for error handling
+        Returns:
+            List of RunResult objects for each volume operation
+        results: List[RunResult] = []
+        """
+        results: List[RunResult] = []
+        concurrency = self.catalog_config.concurrency
+        self.logger.info(
+            f"starting {self.get_operation_name()} of {len(schema_volume_list)} volumes in catalog {self.catalog_name} using {concurrency.max_workers} workers"
+        )
+        self.logger.debug(
+            f"Volumes: {[f'{item['schema_config'].schema_name}.{item['volume_config'].volume_name}' for item in schema_volume_list]}"
+        )
+
+        with ThreadPoolExecutor(max_workers=concurrency.max_workers) as executor:
+            # Submit volume processing jobs
+            future_to_volume = {
+                executor.submit(
+                    self.process_volume, item["schema_config"], item["volume_config"]
+                ): (
+                    item["schema_config"].schema_name,
+                    item["volume_config"].volume_name,
+                )
+                for item in schema_volume_list
+            }
+
+            # Collect volume results
+            for future in as_completed(future_to_volume):
+                schema_name, volume_name = future_to_volume[future]
+                try:
+                    result = []
+                    result = future.result(timeout=self.timeout_seconds)
+
+                    results.extend(result)
+                    # Check if any result in the list failed
+                    for single_result in result:
+                        if single_result.status != "success":
+                            self.logger.error(
+                                f"Failed to process volume "
+                                f"{catalog_name}.{schema_name}.{volume_name}: "
+                                f"{single_result.error_message}"
+                            )
+                except Exception as e:
+                    result = self._handle_exception(
+                        e,
+                        "processing volume",
+                        catalog_name,
+                        schema_name,
+                        volume_name,
+                        "volume",
+                        start_time,
+                    )
+                    results.extend(result)
+                finally:
+                    self.processed_objects.append(f"{schema_name}.{volume_name}")
+
+        executor.shutdown(wait=True)
+
+        self.logger.info(f"All volumes processed in catalog {self.catalog_name}")
         return results
 
     def _process_tables(
@@ -584,28 +799,18 @@ class BaseProvider(ABC):
             for future in as_completed(future_to_table):
                 table_name = future_to_table[future]
                 try:
+                    result = []
                     result = future.result(timeout=self.timeout_seconds)
 
-                    # Handle case where process_table returns a list of results
-                    if result:
-                        if isinstance(result, list):
-                            results.extend(result)
-                            # Check if any result in the list failed
-                            for single_result in result:
-                                if single_result.status != "success":
-                                    self.logger.error(
-                                        f"Failed to process table "
-                                        f"{catalog_name}.{schema_name}.{table_name}: "
-                                        f"{single_result.error_message}"
-                                    )
-                        else:
-                            results.append(result)
-                            if result.status != "success":
-                                self.logger.error(
-                                    f"Failed to process table "
-                                    f"{catalog_name}.{schema_name}.{table_name}: "
-                                    f"{result.error_message}"
-                                )
+                    results.extend(result)
+                    # Check if any result in the list failed
+                    for single_result in result:
+                        if single_result.status != "success":
+                            self.logger.error(
+                                f"Failed to process table "
+                                f"{catalog_name}.{schema_name}.{table_name}: "
+                                f"{single_result.error_message}"
+                            )
                 except Exception as e:
                     result = self._handle_exception(
                         e,
@@ -616,9 +821,11 @@ class BaseProvider(ABC):
                         "table",
                         start_time,
                     )
-                    results.append(result)
+                    results.extend(result)
                 finally:
                     self.processed_objects.append(f"{schema_name}.{table_name}")
+
+        executor.shutdown(wait=True)
 
         self.logger.info(
             f"All tables processed in schema {self.catalog_name}.{schema_name}"
@@ -667,26 +874,16 @@ class BaseProvider(ABC):
             for future in as_completed(future_to_volume):
                 volume_name = future_to_volume[future]
                 try:
+                    result = []
                     result = future.result(timeout=self.timeout_seconds)
-
-                    # Handle case where process_volume returns a list of results
-                    if isinstance(result, list):
-                        results.extend(result)
-                        # Check if any result in the list failed
-                        for single_result in result:
-                            if single_result.status != "success":
-                                self.logger.error(
-                                    f"Failed to process volume "
-                                    f"{catalog_name}.{schema_name}.{volume_name}: "
-                                    f"{single_result.error_message}"
-                                )
-                    else:
-                        results.append(result)
-                        if result.status != "success":
+                    results.extend(result)
+                    # Check if any result in the list failed
+                    for single_result in result:
+                        if single_result.status != "success":
                             self.logger.error(
                                 f"Failed to process volume "
                                 f"{catalog_name}.{schema_name}.{volume_name}: "
-                                f"{result.error_message}"
+                                f"{single_result.error_message}"
                             )
                 except Exception as e:
                     result = self._handle_exception(
@@ -698,9 +895,11 @@ class BaseProvider(ABC):
                         "volume",
                         start_time,
                     )
-                    results.append(result)
+                    results.extend(result)
                 finally:
                     self.processed_objects.append(f"{schema_name}.{volume_name}")
+                    
+        executor.shutdown(wait=True)
 
         self.logger.info(
             f"All volumes processed in schema {self.catalog_name}.{schema_name}"
@@ -708,12 +907,41 @@ class BaseProvider(ABC):
 
         return results
 
+    def _adjust_table_types(self, table_types: List[TableType]) -> List[TableType]:
+        """Adjust table types for replication/reconciliation operations."""
+        adjusted_table_types = table_types.copy()
+        # Add MANAGED table type when EXTERNAL is specified for replication/reconciliation as external tables are shown as MANAGED in shared catalogs
+        if (
+            adjusted_table_types
+            and self.get_operation_name() in ("replication", "reconciliation")
+            and TableType.EXTERNAL in adjusted_table_types
+            and TableType.MANAGED not in adjusted_table_types
+        ):
+            adjusted_table_types.append(TableType.MANAGED)
+
+        return adjusted_table_types
+
+    def _table_type_filter_expression(
+        self, table_types: List[TableType]
+    ) -> Optional[str]:
+        """Construct table type filter expression from table types."""
+        if table_types and len(table_types) > 0:
+            table_types = self._adjust_table_types(table_types)
+            table_type_filters = [
+                f"table_type = '{table_type.value.upper()}'"
+                for table_type in table_types
+            ]
+            table_type_filter_expr = " or ".join(table_type_filters)
+            return table_type_filter_expr
+        return None
+
     def _build_schema_table_filter_expression(self) -> str:
         """construct schema_table_filter_expression from target_schemas if provided"""
         if self.catalog_config.target_schemas:
             schema_table_filters = []
             for schema in self.catalog_config.target_schemas:
                 schema_name = schema.schema_name
+                schema = recursive_substitute(schema, schema_name, "{{schema_name}}")
                 if schema.tables:
                     table_names = [
                         f"table_name = '{table.table_name}'" for table in schema.tables
@@ -735,6 +963,23 @@ class BaseProvider(ABC):
                     schema_table_filter = f"(table_schema = '{schema_name}' and ({schema.table_filter_expression}))"
                 else:
                     schema_table_filter = f"(table_schema = '{schema_name}')"
+
+                table_type_filter_expr = None
+                table_types = []
+
+                if schema.table_types and len(schema.table_types) > 0:
+                    table_types = schema.table_types
+                elif (
+                    self.catalog_config.table_types
+                    and len(self.catalog_config.table_types) > 0
+                ):
+                    table_types = self.catalog_config.table_types
+                # Add MANAGED table type when EXTERNAL is specified for replication/reconciliation as external tables are shown as MANAGED in shared catalogs
+                table_type_filter_expr = self._table_type_filter_expression(table_types)
+                if table_type_filter_expr:
+                    schema_table_filter = (
+                        f"({schema_table_filter} and ({table_type_filter_expr}))"
+                    )
                 schema_table_filters.append(schema_table_filter)
             schema_table_filter_expression = " or ".join(schema_table_filters)
             return schema_table_filter_expression
@@ -746,7 +991,25 @@ class BaseProvider(ABC):
             ]
             schema_table_filter_expression = " and ".join(schema_names)
             return schema_table_filter_expression
-        return self.catalog_config.schema_table_filter_expression
+
+        if self.catalog_config.schema_table_filter_expression:
+            # add table type filters to schema_table_filter_expression
+            table_types = []
+            table_type_filter_expr = None
+            if (
+                self.catalog_config.table_types
+                and len(self.catalog_config.table_types) > 0
+            ):
+                table_types = self.catalog_config.table_types
+
+            # Add MANAGED table type when EXTERNAL is specified for replication/reconciliation as external tables are shown as MANAGED in shared catalogs
+            schema_table_filter_expression = (
+                self.catalog_config.schema_table_filter_expression
+            )
+            table_type_filter_expr = self._table_type_filter_expression(table_types)
+            if table_type_filter_expr:
+                schema_table_filter_expression = f"({self.catalog_config.schema_table_filter_expression} and ({table_type_filter_expr}))"
+        return schema_table_filter_expression
 
     def _create_failed_result(
         self,
@@ -756,7 +1019,7 @@ class BaseProvider(ABC):
         object_type: Optional[str] = None,
         error_msg: str = "",
         start_time: Optional[datetime] = None,
-    ) -> RunResult:
+    ) -> List[RunResult]:
         """
         Create a failed RunResult object with consistent structure.
 
@@ -774,17 +1037,19 @@ class BaseProvider(ABC):
         if start_time is None:
             start_time = datetime.now(timezone.utc)
 
-        return RunResult(
-            operation_type=self.get_operation_name(),
-            catalog_name=catalog_name,
-            schema_name=schema_name,
-            object_name=object_name,
-            object_type=object_type,
-            status="failed",
-            start_time=start_time.isoformat(),
-            end_time=datetime.now(timezone.utc).isoformat(),
-            error_message=error_msg,
-        )
+        return [
+            RunResult(
+                operation_type=self.get_operation_name(),
+                catalog_name=catalog_name,
+                schema_name=schema_name,
+                object_name=object_name,
+                object_type=object_type,
+                status="failed",
+                start_time=start_time.isoformat(),
+                end_time=datetime.now(timezone.utc).isoformat(),
+                error_message=error_msg,
+            )
+        ]
 
     def _get_schemas(self) -> List[SchemaConfig]:
         """
@@ -832,7 +1097,9 @@ class BaseProvider(ABC):
 
         return [SchemaConfig(schema_name=item) for item in schema_list]
 
-    def _get_schema_tables(self) -> List[dict]:
+    def _get_schema_tables(
+        self, schema_table_filter_expression: Optional[str] = None
+    ) -> List[dict]:
         """
         Get list of schema and table combinations when schema_table_filter_expression is configured.
         This method is triggered when catalog_config.schema_table_filter_expression is set.
@@ -840,15 +1107,6 @@ class BaseProvider(ABC):
         Returns:
             List of dictionaries with 'schema_name' and 'table_name' keys
         """
-        schema_table_filter_expression = (
-            self.catalog_config.schema_table_filter_expression
-        )
-
-        if not schema_table_filter_expression:
-            self.logger.warning(
-                f"_get_schema_tables called but no schema_table_filter_expression configured for catalog {self.catalog_config.catalog_name}"
-            )
-            return []
 
         # Use database operations to get schema-table combinations matching the filter expression
         schema_tables = self.db_ops.get_schema_tables_by_filter(
@@ -931,11 +1189,37 @@ class BaseProvider(ABC):
                 f"Found {len(table_names)} and exclude {len(table_names) - len(table_names_filtered)} processed tables"
             )
 
+        table_types = []
+        # get table type filters from schema configuration
+        if schema_config.table_types and len(schema_config.table_types) > 0:
+            table_types = [
+                table_type.value.lower() for table_type in schema_config.table_types
+            ]
+        # create table type filters based on uc_object_types
+        if schema_config.uc_object_types:
+            table_types_set = set()
+            if UCObjectType.ALL in schema_config.uc_object_types:
+                table_types_set.update(
+                    ["managed", "external", "streaming_table", "view"]
+                )
+            if (
+                UCObjectType.TABLE_TAG in schema_config.uc_object_types
+                or UCObjectType.COLUMN_TAG in schema_config.uc_object_types
+                or UCObjectType.COLUMN_COMMENT in schema_config.uc_object_types
+            ):
+                table_types_set.update(
+                    ["managed", "external", "streaming_table", "view"]
+                )
+            if UCObjectType.VIEW in schema_config.uc_object_types:
+                table_types_set.update(["view"])
+            if table_types_set:
+                table_types = list(table_types_set)
+
         filtered_table_names = self.db_ops.filter_tables_by_type(
             self.catalog_name,
             schema_name,
             table_names_filtered,
-            schema_config.table_types,
+            table_types,
             schema_config.concurrency.parallel_table_filter,
         )
         # Then filter by table types
@@ -977,11 +1261,25 @@ class BaseProvider(ABC):
         volume_names = [
             volume for volume in volume_names if volume not in exclude_names
         ]
+
+        volume_types = []
+        # get volume type filters from schema configuration
+        if schema_config.volume_types and len(schema_config.volume_types) > 0:
+            volume_types = [
+                volume_type.value.lower() for volume_type in schema_config.volume_types
+            ]
+        # create volume type filters based on uc_object_types
+        if schema_config.uc_object_types and (
+            UCObjectType.VOLUME in schema_config.uc_object_types
+            or UCObjectType.VOLUME_TAG in schema_config.uc_object_types
+        ):
+            volume_types.extend(["managed", "external"])
+
         filtered_volume_names = self.db_ops.filter_volumes_by_type(
             self.catalog_name,
             schema_name,
             volume_names,
-            schema_config.volume_types,
+            volume_types,
         )
         # Then filter by volume types
         return [

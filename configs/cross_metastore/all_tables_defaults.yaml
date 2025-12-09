@@ -33,6 +33,7 @@ reconciliation_config:
   missing_data_check: false
 
 concurrency:
+  process_schemas_in_serial: false
   max_workers: 5
   parallel_table_filter: 8
   timeout_seconds: 1800

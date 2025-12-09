@@ -35,12 +35,12 @@ external_location_config:
     - external_location_1
     - external_location_2
 
-# Mandatory: Only one of uc_object_types, table_types, volume_types must be provided at args level(highest priority), catalog level or replication group level (lowest priority).
+# Mandatory: Only one of uc_object_types, table_types, volume_types must be provided
 # when uc_object_types is provided, uc metadata will be replicated.
 # when table_types is provided, data in tables of specified types will be replicated.
 # when volume_types is provided, files in volumes of specified types will be replicated.
 
-# Optional: replication group level. can be overriden by catalog level or args
+# Optional: replication group level uc object types. 
 uc_object_types: [
     "all",
     "storage_credential",
@@ -49,21 +49,21 @@ uc_object_types: [
     "catalog_tag",
     "schema",
     "schema_tag",
-    # "view",
-    "view_tag",
+    "view",
     "volume",
     "volume_tag",
     "table_tag",
     "column_tag",
     "column_comment",
+    # "table_comment"
     # "permission"
   ]
 
-# Optional: replication group level. can be overriden by catalog level or args
+# Optional: replication group level table types. 
 # supported types: all, streaming_table, managed, external.
 table_types: ["all", "managed", "streaming_table", "external"]
 
-# Optional: replication group level. can be overriden by catalog level or args
+# Optional: replication group level volume types. 
 # supported volume types: managed, external.
 # volume_types: ["all","managed", "external"]
 
@@ -219,13 +219,12 @@ reconciliation_config:
 target_catalogs:
   # Mandatory: target catalog name
   - catalog_name: "catalog_example"
-    # Optional: cataloglevel.
-    # supported types: all, streaming_table, managed, external.
+    # Optional catalog level: supported table types: all, streaming_table, managed, external.
     table_types: ["all", "managed", "streaming_table", "external"]
-    # Optional at replication group level or catalog level: supported volume types: managed, external.
+    # Optional catalog level: supported volume types: managed, external.
     # Note: external volumes require cloud_url_mapping configuration above
     # supported volume types: managed, external.
-    volume_types: ["managed", "external"]
+    volume_types: ["all", "managed", "external"]
     # Optional: WHERE clause condition used to filter schemas and tables in all schemas from {catalog}.information_schema.tables. config target_schemas, exclude_schemas at the same time not allowed.
     schema_table_filter_expression: "table_name like 'fact_%' and table_schema like 'bronze_%'"
     # Optional: target_schema list. can be overriden by args
@@ -267,18 +266,20 @@ target_catalogs:
     reconciliation_config:
     # check config at replication group level
 
-# Optional: Concurrency settings
+# Optional: Concurrency settings at replication group level
 concurrency:
-  # Optional: no of parallel threads for table and volume replication in a schema. default is 8.
+  # Optional: whether to process schemas in serial. default is false. all tables in the catalog will be processed in parallel if set to false.
+  process_schemas_in_serial: false
+  # Optional: no of parallel threads for table and volume replication. default is 8.
   max_workers: 8
   # Optional: no of parallel threads for table filtering in a schema. default is 8.
   parallel_table_filter: 8
   # Optional: timeout for each task. default is 3600.
-  timeout_seconds: 3600
+  timeout_seconds: 1800
 
-# Optional: Retry settings
+# Optional: Retry settings at replication group level
 retry:
-  # Optional: maximum number of retry attempts. default is 3.
+  # Optional: maximum number of retry attempts on object cloning operations. default is 3.
   max_attempts: 3
   # Optional: delay between retry attempts in seconds. default is 5.
   retry_delay_seconds: 5

@@ -15,6 +15,7 @@ from ..exceptions import ReconciliationError, TableNotFoundError
 from ..utils import (
     create_spark_session,
     get_workspace_url_from_host,
+    recursive_substitute,
     retry_with_logging,
     validate_spark_session,
 )
@@ -82,6 +83,14 @@ class ReconciliationProvider(BaseProvider):
                 reconciliation_config.recon_catalog_location,
             )
 
+            self.logger.info(
+                f"""Creating recon result schema: {reconciliation_config.recon_outputs_schema}"""
+            )
+            self.db_ops.create_schema_if_not_exists(
+                reconciliation_config.recon_outputs_catalog,
+                reconciliation_config.recon_outputs_schema,
+            )            
+
         # Create source catalog from share if needed
         if reconciliation_config.create_shared_catalog:
             sharing_identifier = self.source_databricks_config.sharing_identifier
@@ -98,29 +107,18 @@ class ReconciliationProvider(BaseProvider):
             )
         return reconciliation_config.source_catalog
 
-    def process_schema_concurrently(
-        self,
-        schema_config: SchemaConfig,
-    ) -> List[RunResult]:
-        """Override to add reconciliation-specific schema setup."""
-        reconciliation_config = schema_config.reconciliation_config
-
-        # Ensure reconciliation_results schema exists for consolidated tables
-        self.db_ops.create_schema_if_not_exists(
-            reconciliation_config.recon_outputs_catalog,
-            reconciliation_config.recon_outputs_schema,
-        )
-
-        return super().process_schema_concurrently(schema_config)
-
     def process_table(
         self, schema_config: SchemaConfig, table_config: TableConfig
     ) -> List[RunResult]:
         """Process a single table for reconciliation."""
+        # Substitute table name in table config
+        table_config = recursive_substitute(
+            table_config, table_config.table_name, "{{table_name}}"
+        )
         results = []
         result = self._reconcile_table(schema_config, table_config)
         if result:
-            results.append(result)
+            results.extend(result)
             self.audit_logger.log_results(results)
         return results
 
@@ -128,7 +126,7 @@ class ReconciliationProvider(BaseProvider):
         self,
         schema_config: SchemaConfig,
         table_config: TableConfig,
-    ) -> RunResult:
+    ) -> List[RunResult]:
         """
         Reconcile a single table between source and target.
 
@@ -154,17 +152,13 @@ class ReconciliationProvider(BaseProvider):
             extra={"run_id": self.run_id, "operation": "reconciliation"},
         )
 
-        source_table_type = None
         try:
-            # Refresh target table metadata
-            self.db_ops.refresh_table_metadata(target_table)
-
             # Check if source table exists
             if not self.spark.catalog.tableExists(source_table):
                 raise TableNotFoundError(f"Source table does not exist: {source_table}")
-
-            # Get source table type for audit logging
-            source_table_type = self.db_ops.get_table_type(source_table)
+            # Check if target table exists
+            if not self.spark.catalog.tableExists(target_table):
+                raise TableNotFoundError(f"Target table does not exist: {target_table}")
 
             reconciliation_results = {}
             failed_checks = []
@@ -357,25 +351,26 @@ class ReconciliationProvider(BaseProvider):
                         missing_data_duration
                     )
 
-                return RunResult(
-                    operation_type="reconciliation",
-                    catalog_name=target_catalog,
-                    schema_name=schema_name,
-                    object_name=table_name,
-                    object_type="table",
-                    status="success",
-                    start_time=start_time.isoformat(),
-                    end_time=end_time.isoformat(),
-                    details={
-                        "source_table": source_table,
-                        "target_table": target_table,
-                        "table_type": source_table_type,
-                        "reconciliation_results": reconciliation_results,
-                        "failed_checks": failed_checks,
-                        "skipped_checks": skipped_checks,
-                        "check_durations": check_durations,
-                    },
-                )
+                return [
+                    RunResult(
+                        operation_type="reconciliation",
+                        catalog_name=target_catalog,
+                        schema_name=schema_name,
+                        object_name=table_name,
+                        object_type="table",
+                        status="success",
+                        start_time=start_time.isoformat(),
+                        end_time=end_time.isoformat(),
+                        details={
+                            "source_table": source_table,
+                            "target_table": target_table,
+                            "reconciliation_results": reconciliation_results,
+                            "failed_checks": failed_checks,
+                            "skipped_checks": skipped_checks,
+                            "check_durations": check_durations,
+                        },
+                    )
+                ]
             else:
                 error_msg = f"Reconciliation failed checks: {failed_checks}"
                 self.logger.error(
@@ -410,26 +405,27 @@ class ReconciliationProvider(BaseProvider):
                         locals().get("missing_data_duration", 0.0)
                     )
 
-                return RunResult(
-                    operation_type="reconciliation",
-                    catalog_name=target_catalog,
-                    schema_name=schema_name,
-                    object_name=table_name,
-                    object_type="table",
-                    status="failed",
-                    start_time=start_time.isoformat(),
-                    end_time=end_time.isoformat(),
-                    error_message=error_msg,
-                    details={
-                        "source_table": source_table,
-                        "target_table": target_table,
-                        "table_type": source_table_type,
-                        "reconciliation_results": reconciliation_results,
-                        "failed_checks": failed_checks,
-                        "skipped_checks": skipped_checks,
-                        "check_durations": check_durations,
-                    },
-                )
+                return [
+                    RunResult(
+                        operation_type="reconciliation",
+                        catalog_name=target_catalog,
+                        schema_name=schema_name,
+                        object_name=table_name,
+                        object_type="table",
+                        status="failed",
+                        start_time=start_time.isoformat(),
+                        end_time=end_time.isoformat(),
+                        error_message=error_msg,
+                        details={
+                            "source_table": source_table,
+                            "target_table": target_table,
+                            "reconciliation_results": reconciliation_results,
+                            "failed_checks": failed_checks,
+                            "skipped_checks": skipped_checks,
+                            "check_durations": check_durations,
+                        },
+                    )
+                ]
 
         except Exception as e:
             end_time = datetime.now(timezone.utc)
@@ -445,22 +441,23 @@ class ReconciliationProvider(BaseProvider):
                 extra={"run_id": self.run_id, "operation": "reconciliation"},
             )
 
-            return RunResult(
-                operation_type="reconciliation",
-                catalog_name=target_catalog,
-                schema_name=schema_name,
-                table_name=table_name,
-                status="failed",
-                start_time=start_time.isoformat(),
-                end_time=end_time.isoformat(),
-                duration_seconds=duration,
-                error_message=error_msg,
-                details={
-                    "source_table": source_table,
-                    "target_table": target_table,
-                    "table_type": source_table_type,
-                },
-            )
+            return [
+                RunResult(
+                    operation_type="reconciliation",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    object_name=table_name,
+                    status="failed",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    error_message=error_msg,
+                    details={
+                        "source_table": source_table,
+                        "target_table": target_table,
+                    },
+                )
+            ]
 
     def _perform_schema_check(
         self,
