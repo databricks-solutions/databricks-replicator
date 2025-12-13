@@ -133,17 +133,30 @@ source .venv/bin/activate
 - High level replication steps are also descrbied in the sample config
 - For more comprehensive understanding of available configs, check <a href=./configs/README.yaml>README.yaml</a>
 
-
 ```bash
-# Replicate data in the following logical order - The solution can be flexibly configured to replicate all or selected objects and data. Some objects such as storage credentials might be created centrally with Terraform instead
-# Storage credentials -> External locations -> Catalogs -> Schemas -> Tables -> Volumes -> Materialized Views -> Views -> Tags -> Column Comments -> Permissions -> Volume Files
-
 # Check all available args
 data-replicator --help
 
 # Validate configuration without running
-data-replicator <config.yaml> --validate-only
+data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --validate-only
+data-replicator configs/cross_metastore/all_tables_defaults.yaml --validate-only
+data-replicator configs/cross_metastore/volume_defaults.yaml --validate-only
 
+# Replicate all uc metadata
+# Set storage_credential_config if storage credentials need to be replicated
+# Set cloud_url_mapping if external location or external table need to be replicated
+# Objects will be replicated in the following logical order: Storage credentials -> External locations -> Catalogs -> Schemas -> Tables -> Views -> Volumes -> Column Tags -> Column Comments -> Permissions
+data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --uc-object-types all --target-catalogs catalog1,catalog2,catalog3
+
+# Replicate delta tables for specific catalogs
+# DLT streaming tables must already exist in target before replicate
+data-replicator configs/cross_metastore/all_tables_defaults.yaml --target-catalogs catalog1,catalog2,catalog3
+
+# Replicate volume files for specific volumes
+data-replicator configs/cross_metastore/volume_defaults.yaml --target-catalogs aaron_replication --target-schemas bronze_1,silver_1 --target-volumes raw
+```
+The solution can be flexibly configured to replicate all or selected objects and data. Some objects such as storage credentials might be created centrally with Terraform instead
+```bash
 # Replicate Storage credentials and External locations
 # Cloud identities setup (AWS role or Azure Managed Identity) with required access to cloud storage
 # Configure uc_metadata_defaults.yaml
