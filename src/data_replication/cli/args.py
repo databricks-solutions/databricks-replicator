@@ -152,23 +152,19 @@ def validate_args(args) -> None:
                 "When target-volumes is provided, target-catalogs must also be provided"
             )
 
-    # Rule: table-filter-expression and target-tables cannot be used together
-    if args.table_filter_expression and args.target_tables:
+    # Rule: schema-table-filter-expression and target-tables cannot be used together
+    if args.schema_table_filter_expression and ( args.target_tables or args.target_schemas):
         raise ValueError(
-            "table-filter-expression and target-tables cannot be used together. "
-            "Use either --table-filter-expression to filter tables by SQL expression "
-            "or --target-tables to specify exact table names, but not both."
+            "schema-table-filter-expression and target-schemas/target-tables cannot be used together. "
+            "Use either --schema-table-filter-expression to filter tables by SQL expression "
+            "or --target-schemas/--target-tables to specify exact schema/table names, but not both."
         )
 
-    # Rule: when table-filter-expression is provided, target-schemas and target-catalogs must be provided
-    if args.table_filter_expression:
-        if not args.target_schemas:
-            raise ValueError(
-                "When table-filter-expression is provided, target-schemas must also be provided"
-            )
+    # Rule: when schema-table-filter-expression is provided, target-catalogs must be provided
+    if args.schema_table_filter_expression:
         if not args.target_catalogs:
             raise ValueError(
-                "When table-filter-expression is provided, target-catalogs must also be provided"
+                "When schema-table-filter-expression is provided, target-catalogs must also be provided"
             )
 
     # Volume argument validation
@@ -250,10 +246,10 @@ def setup_argument_parser():
     )
 
     parser.add_argument(
-        "--table-filter-expression",
+        "--schema-table-filter-expression",
         "-tfe",
         type=str,
-        help="SQL filter expression to select tables within schemas, e.g. \"tableName like 'fact_%%'\" (use quotes in shell)",
+        help="WHERE clause condition used to filter schemas and tables in all schemas from catalog.information_schema.tables., e.g. \"table_schema like 'fact_%%' AND table_name like 'sales_%%'\" (use quotes in shell)",
     )
 
     parser.add_argument(

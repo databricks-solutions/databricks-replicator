@@ -67,17 +67,19 @@ Flexibility to let the tool setup Delta share infra automatically for you with d
 - Run in cli, or deployed via DAB as workflow job
 
 ### Flexible Configuration
-- YAML-based configuration with Pydantic validation
-- Hierarchical configuration with inheritance, i.e. table level -> schema level -> catalog level -> replication group
+- YAML-based configuration with Pydantic validation. 
+- Hierarchical configuration with inheritance and CLI overrides
 - Environments to manage env specific connection and configurations
+- Substitute support to allow dynamic config string
 - Oject types flexible selective replication
 - Catalog, schema and table flexible selective replication
-- Replicate from/into catalog of same or different name
-  
+- Check <a href=./docs/config_features.md>this</a> for complete config features.
+- Check <a href=./configs/README.yaml>this</a> for available configs with detail descriptions.
+
 ### Incremental Data Replication
 The system leverages native Deep Clone and Autoloader for incrementality and replication performance
 - Deep clone for delta table
-- Autoloader for volume files with option to specify starting timestamp
+- Autoloader + File copy for volume files replication with option to specify starting timestamp
 - Option to replicate external table as managed table to support managed table migration
 
 ### Streaming Table Handling
@@ -88,7 +90,7 @@ The system automatically handles Streaming Tables complexities:
 
 ### UC Metadata Replication
 Replicate UC metadata
-- Create or update target UC objects with Databricks SDK
+- Create or update target UC objects with Databricks SDK or SQL
 - Incremental tag replication
 
 ### Parrallel Replication
@@ -107,6 +109,7 @@ Replicate UC metadata
 ## Prerequisites
 - User or Service Principal in source and target workspace created with metastore admin right. If metastore admin permission is not available, check <a href=./docs/permissions.md>here</a> to apply more granular UC access control
 - For cross-metastore replication, enable Delta Sharing (DS) including network connectivity https://docs.databricks.com/aws/en/delta-sharing/set-up#gsc.tab=0
+- Table replication requires Delta Share with Cloud Token method instead Presigned URL
 
 - PAT or OAuth Token for user or sp created and stored in Databricks Key Vault.
 **Note**: if this tool is run in source workspace, only target workspace token secrets need to be created in source. Conversely, if run in target workspace, source token needs to be created in target.

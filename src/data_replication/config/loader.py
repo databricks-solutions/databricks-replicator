@@ -36,7 +36,7 @@ class ConfigLoader:
         target_schemas_override: str = None,
         target_tables_override: str = None,
         target_volumes_override: str = None,
-        table_filter_expression_override: str = None,
+        schema_table_filter_expression_override: str = None,
         concurrency_override: int = None,
         uc_object_types_override: list = None,
         table_types_override: list = None,
@@ -209,6 +209,21 @@ class ConfigLoader:
                     f"Invalid target_catalog configuration: {e}"
                 ) from e
 
+        #  Handle schema_table_filter_expression override
+        if schema_table_filter_expression_override:
+            try:
+                # Apply override to all target catalogs
+                if "target_catalogs" in config_data:
+                    for catalog in config_data["target_catalogs"]:
+                        catalog["schema_table_filter_expression"] = (
+                            schema_table_filter_expression_override
+                        )
+
+            except ValidationError as e:
+                raise ConfigurationError(
+                    f"Invalid schema_table_filter_expression configuration: {e}"
+                ) from e
+
         # Handle target_schemas & target_tables override
         if target_schemas_override:
             try:
@@ -228,7 +243,6 @@ class ConfigLoader:
                 schemas = []
                 for schema_name in schema_names:
                     # Handle target_tables override
-                    filter_expression = None
                     schema = {}
                     schema["schema_name"] = schema_name
                     if target_tables_override:
@@ -238,11 +252,6 @@ class ConfigLoader:
                             for name in target_tables_override.split(",")
                         ]
                         schema["tables"] = table_names
-
-                    elif table_filter_expression_override:
-                        # Use table filter expression instead of explicit tables
-                        filter_expression = table_filter_expression_override
-                        schema["table_filter_expression"] = filter_expression
 
                     # Handle target_volumes override
                     if target_volumes_override:
@@ -493,7 +502,10 @@ class ConfigLoader:
 
     @staticmethod
     def _load_and_merge_environment(
-        config_data: dict, config_path: Path, environment_name: str = None, env_path: str = None
+        config_data: dict,
+        config_path: Path,
+        environment_name: str = None,
+        env_path: str = None,
     ) -> dict:
         """
         Load environment configuration and merge with main config. configs in environments.yaml

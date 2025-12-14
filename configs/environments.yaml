@@ -1,7 +1,7 @@
 # environment specification in YAML format. Default path is same or parent directory of config files. Can be overridden by args.
 # Multiple environments can be defined, but only one environment can be marked as default. environment name must be unique.
 # environment can be provided by args when running the job to override the default environment.
-# Configurations specified here take precedence over configurations specified in config yamls.
+# Configurations specified here take precedence over configurations specified in config yamls (replications groups).
 # This is useful for defining different source and target databricks workspaces for different environments.
 # e.g. if Azure is primary and AWS is secondary, you can define environments as azure_to_aws_dev, azure_to_aws_prod for DR failover, aws_to_azure_dev, aws_to_azure_prod for DR failback.
 version: "1.0"
