@@ -34,6 +34,7 @@ This system provides incremental data and UC metadata replication capabilities b
 ### Unsupported Object Types
 - Databricks Workspace Assets is not yet supported, but maybe considered in future roadmap
 - Streaming checkpoints are not replicated. Streaming state handling should be managed outside this solution.
+- Hive metastore
 
 ## Supported Operation Types
 ### Backup Operations
