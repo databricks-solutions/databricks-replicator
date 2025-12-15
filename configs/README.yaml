@@ -88,7 +88,7 @@ backup_config:
   share_name: "catalog_example_to_aws_share"
 
   # Streaming table specific configurations start here: ------------------------
-  # Optional: whether to create backup catalog on target. default is false.
+  # Optional: whether to create backup catalog on source. default is false.
   create_backup_catalog: false
   # Optional: backup catalog name. must not be set for non-streaming table replication.
   # default to __replication_internal_<catalog_name>_to_<target_databricks_connect_config.name>
@@ -97,8 +97,12 @@ backup_config:
   backup_catalog_location: null
   # Optional: prefix for backup schema names. default is None.
   backup_schema_prefix: null
+  # Optional: whether to create backup share on source. default is false.
+  create_backup_share: false
   # Optional: share name for streaming table backing table. default to <backup_catalog>_share
   backup_share_name: "__replication_internal_catalog_example_to_aws_share"
+  # Optional: whether to create dpm backing table share on source. default is false.
+  create_dpm_backing_table_share: false
   # Optional: backing table share name for dpm dlt backing table. default to __replication_internal_dpm_<catalog_name>_to_<target_databricks_connect_config.name>_share
   dpm_backing_table_share_name: "__replication_internal_dpm_catalog_example_to_aws_share"
   # streaming table specific configurations end here: ------------------------
@@ -113,6 +117,8 @@ replication_config:
   target_catalog_location: null
   # Optional: whether to create the shared catalog. default is false.
   create_shared_catalog: false
+  # Optional: share provider name. default is None.
+  provider_name: None
   # Optional: share name of source catalog. default to <catalog_name>_to_<target_databricks_connect_config.name>_share
   share_name: "catalog_example_to_aws_share"
   # Optional: catalog created from source share. default to <catalog_name>_from_<source_databricks_connect_config.name>_shared
@@ -141,10 +147,14 @@ replication_config:
   # uc metadata specific configurations end here: ------------------------
 
   # Streaming table specific configurations start here: ------------------------
+  # Optional: whether to create backup shared catalog on target. default is false.
+  create_backup_shared_catalog: false
   # Optional: share name for streaming table backing table share. default to __replication_internal_<catalog_name>_to_<target_databricks_connect_config.name>_share
   backup_share_name: "__replication_internal_catalog_example_to_aws_share"
   # Optional: catalog created from backing table share. default to __replication_internal_<catalog_name>_from_<source_databricks_connect_config.name>_shared
   backup_catalog: "__replication_internal_catalog_example_from_azure_shared"
+  # Optional: whether to create dpm backing table shared catalog on target. default is false.
+  create_dpm_backing_table_shared_catalog: false  
   # Optional: backing table share name for dpm dlt backing table. default to __replication_internal_dpm_<catalog_name>_to_<target_databricks_connect_config.name>_share
   dpm_backing_table_share_name: "__replication_internal_dpm_catalog_example_to_aws_share"
   # Optional: catalog created from dpm dlt backing table share. default to __replication_internal_dpm_<catalog_name>_from_<source_databricks_connect_config.name>_shared

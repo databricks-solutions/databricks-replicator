@@ -178,8 +178,10 @@ class BackupConfig(BaseModel):
     create_backup_catalog: Optional[bool] = False
     backup_catalog: Optional[str] = None
     backup_catalog_location: Optional[str] = None
+    create_backup_share: Optional[bool] = False
     backup_share_name: Optional[str] = None
     backup_schema_prefix: Optional[str] = None
+    create_dpm_backing_table_share: Optional[bool] = False
     dpm_backing_table_share_name: Optional[str] = None
 
     @field_validator("source_catalog", "backup_catalog")
@@ -197,11 +199,14 @@ class ReplicationConfig(BaseModel):
     create_target_catalog: Optional[bool] = False
     target_catalog_location: Optional[str] = None
     create_shared_catalog: Optional[bool] = False
+    provider_name: Optional[str] = None
     share_name: Optional[str] = None
     source_catalog: Optional[str] = None
     replicate_enable_predictive_optimization: Optional[bool] = False
+    create_backup_shared_catalog: Optional[bool] = False
     backup_share_name: Optional[str] = None
     backup_catalog: Optional[str] = None
+    create_dpm_backing_table_shared_catalog: Optional[bool] = False
     dpm_backing_table_share_name: Optional[str] = None
     dpm_backing_table_catalog: Optional[str] = None
     create_intermediate_catalog: Optional[bool] = False

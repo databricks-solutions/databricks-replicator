@@ -22,10 +22,12 @@ target_catalogs:
       share_name: "aaron_share"
       backup_catalog: "aaron_dr"
       backup_share_name: "aaron_dr_azure"
+      dpm_backing_table_share_name: "aaron_dpm_azure_share"
     replication_config:
       enabled: true
       source_catalog: "aaron_azure_shared"
       backup_catalog: "aaron_dr_azure_shared"
+      dpm_backing_table_catalog: "aaron_dpm_azure_shared"
     reconciliation_config:
       enabled: true
       source_catalog: aaron_azure_shared

@@ -110,8 +110,9 @@ class BaseProvider(ABC):
         self.processed_objects: List[str] = []
         self.completed_objects: List[str] = [
             f"{result.catalog_name}.{result.schema_name}.{result.object_name}"
-            for result in completed_run_results
+            for result in completed_run_results or []
         ]
+        self.shared_tables: List[str] = []
 
     @abstractmethod
     def setup_operation_catalogs(self):
@@ -1187,20 +1188,34 @@ class BaseProvider(ABC):
         # Apply exclusions first
         table_names = [table for table in table_names if table not in exclude_names]
 
-        table_names_filtered = table_names
+        table_names_unprocessed = table_names
         # Skip already processed tables
         if SKIP_PROCESSED_TABLES:
-            table_names = [
+            table_names_unprocessed = [
                 table
                 for table in table_names
                 if f"{schema_name}.{table}" not in self.processed_objects
                 and f"{self.catalog_config.catalog_name}.{schema_name}.{table}"
                 not in self.completed_objects
             ]
-        if len(table_names_filtered) != len(table_names):
+        if len(table_names_unprocessed) != len(table_names):
             self.logger.info(
-                f"Found {len(table_names)} and exclude {len(table_names) - len(table_names_filtered)} processed tables"
+                f"Exclude {len(table_names) - len(table_names_unprocessed)} processed tables from {len(table_names)} tables"
             )
+
+        table_names_unshared = table_names_unprocessed
+        if self.shared_tables:
+            # Exclude tables that are already in shared tables
+            table_names_unshared = [
+                table
+                for table in table_names_unprocessed
+                if f"{self.catalog_name}.{schema_name}.{table}"
+                not in self.shared_tables
+            ]
+            if len(table_names_unshared) != len(table_names_unprocessed):
+                self.logger.info(
+                    f"Exclude {len(table_names_unprocessed) - len(table_names_unshared)} already shared tables from {len(table_names_unprocessed)} tables"
+                )
 
         table_types = []
         # get table type filters from schema configuration
@@ -1235,10 +1250,14 @@ class BaseProvider(ABC):
         filtered_table_names = self.db_ops.filter_tables_by_type(
             self.catalog_name,
             schema_name,
-            table_names_filtered,
+            table_names_unshared,
             table_types,
             schema_config.concurrency.parallel_table_filter,
         )
+        if len(filtered_table_names) != len(table_names_unshared):
+            self.logger.info(
+                f"Exclude {len(table_names_unshared) - len(filtered_table_names)} table types unmatched tables from {len(table_names_unshared)} tables"
+            )
         # Then filter by table types
         return [table for table in tables if table.table_name in filtered_table_names]
 

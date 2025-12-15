@@ -12,7 +12,7 @@ version: "1.0"
 replication_group: "all_tables_defaults"
 
 cloud_url_mapping:
-  "abfss://aaboode@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/aaron2"
+  "abfss://aaboode@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/aaron2/"
 
 audit_config:
   audit_table: "data_replication.audit.audit_logging"
@@ -24,9 +24,13 @@ backup_config:
   create_recipient: true
   create_share: true
   add_to_share: true
+  create_backup_share: true
+  create_dpm_backing_table_share: true
 replication_config:
   enabled: true
   create_shared_catalog: true
+  create_backup_shared_catalog: true
+  create_dpm_backing_table_shared_catalog: true
 reconciliation_config:
   enabled: true
   create_shared_catalog: true

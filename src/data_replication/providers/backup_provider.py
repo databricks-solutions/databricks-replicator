@@ -33,6 +33,8 @@ class BackupProvider(BaseProvider):
             and (
                 self.catalog_config.backup_config.create_recipient
                 or self.catalog_config.backup_config.create_share
+                or self.catalog_config.backup_config.create_backup_share
+                or self.catalog_config.backup_config.create_dpm_backing_table_share
             )
             and not self.target_databricks_config.sharing_identifier
         ):
@@ -51,6 +53,14 @@ class BackupProvider(BaseProvider):
                 self.target_spark, get_workspace_url_from_host(target_host)
             )
             self.target_dbops = DatabricksOperations(self.target_spark, self.logger)
+
+        if (
+            self.catalog_config.backup_config
+            and self.catalog_config.backup_config.dpm_backing_table_share_name
+        ):
+            self.shared_tables = self.db_ops.get_shared_tables(
+                self.catalog_config.backup_config.dpm_backing_table_share_name
+            )
 
     def get_operation_name(self) -> str:
         """Get the name of the operation for logging purposes."""
@@ -108,7 +118,11 @@ class BackupProvider(BaseProvider):
                 backup_config.recipient_name = recipient_name
 
         # Create delta shares at catalog level if configured
-        if backup_config.create_share or backup_config.dpm_backing_table_share_name:
+        if (
+            backup_config.create_share
+            or backup_config.create_backup_share
+            or backup_config.create_dpm_backing_table_share
+        ):
             sharing_identifier = self.target_databricks_config.sharing_identifier
             if not sharing_identifier:
                 sharing_identifier = self.target_dbops.get_metastore_id()
@@ -123,17 +137,19 @@ class BackupProvider(BaseProvider):
                     backup_config.share_name,
                     backup_config.recipient_name,
                 )
-
+            if backup_config.create_backup_share and backup_config.backup_share_name:
                 # Create backup delta shares at catalog level if configured
-                if backup_config.backup_share_name:
-                    self.logger.info(
-                        f"""Creating backup delta share: {backup_config.backup_share_name} and granting access to recipient: {backup_config.recipient_name}"""
-                    )
-                    self.db_ops.create_delta_share(
-                        backup_config.backup_share_name,
-                        backup_config.recipient_name,
-                    )
-            if backup_config.dpm_backing_table_share_name:
+                self.logger.info(
+                    f"""Creating backup delta share: {backup_config.backup_share_name} and granting access to recipient: {backup_config.recipient_name}"""
+                )
+                self.db_ops.create_delta_share(
+                    backup_config.backup_share_name,
+                    backup_config.recipient_name,
+                )
+            if (
+                backup_config.create_dpm_backing_table_share
+                and backup_config.dpm_backing_table_share_name
+            ):
                 self.logger.info(
                     f"""Creating DPM backing tables delta share: {backup_config.dpm_backing_table_share_name} and granting access to recipient: {backup_config.recipient_name}"""
                 )
@@ -141,6 +157,7 @@ class BackupProvider(BaseProvider):
                     backup_config.dpm_backing_table_share_name,
                     backup_config.recipient_name,
                 )
+
         return backup_config.source_catalog
 
     def process_schema(
@@ -320,7 +337,41 @@ class BackupProvider(BaseProvider):
                         f"Starting adding dpm dlt backing table to share: {source_table}",
                         extra={"run_id": self.run_id, "operation": "backup"},
                     )
-
+                    if self.db_ops.is_table_in_share(
+                        dpm_backing_table_share_name, actual_source_table
+                    ):
+                        self.logger.info(
+                            f"DPM backing table {actual_source_table} is already in share {dpm_backing_table_share_name}, skipping.",
+                            extra={"run_id": self.run_id, "operation": "backup"},
+                        )
+                        end_time = datetime.now(timezone.utc)
+                        duration = (end_time - start_time).total_seconds()
+                        return [
+                            RunResult(
+                                operation_type="backup",
+                                catalog_name=source_catalog,
+                                schema_name=schema_name,
+                                object_name=table_name,
+                                object_type="table",
+                                status="success",
+                                start_time=start_time.isoformat(),
+                                end_time=end_time.isoformat(),
+                                duration_seconds=duration,
+                                details={
+                                    "backup_table": backup_table,
+                                    "backup_schema_name": backup_schema_name,
+                                    "source_table": actual_source_table,
+                                    "dlt_type": dlt_type,
+                                    "step1_query": step1_query,
+                                    "step2_query": step2_query,
+                                    "backup_schema_prefix": backup_config.backup_schema_prefix,
+                                    "dlt_flag": dlt_flag,
+                                    "skipped": True,
+                                },
+                                attempt_number=attempt,
+                                max_attempts=max_attempts,
+                            )
+                        ]
                     # Prequisite: the executing user is authorized to grant SELECT to itself. i.e. metastore admin or owner of the table
                     # Explicitly grant access to dpm backing table before adding to share
                     current_user = self.db_ops.get_current_user()
@@ -339,7 +390,32 @@ class BackupProvider(BaseProvider):
                     f"Skipping backup for non-DLT table: {source_table}",
                     extra={"run_id": self.run_id, "operation": "backup"},
                 )
-                return []
+                return [
+                    RunResult(
+                        operation_type="backup",
+                        catalog_name=source_catalog,
+                        schema_name=schema_name,
+                        object_name=table_name,
+                        object_type="table",
+                        status="success",
+                        start_time=start_time.isoformat(),
+                        end_time=end_time.isoformat(),
+                        duration_seconds=duration,
+                        details={
+                            "backup_table": backup_table,
+                            "backup_schema_name": backup_schema_name,
+                            "source_table": actual_source_table,
+                            "dlt_type": dlt_type,
+                            "step1_query": step1_query,
+                            "step2_query": step2_query,
+                            "backup_schema_prefix": backup_config.backup_schema_prefix,
+                            "dlt_flag": dlt_flag,
+                            "skipped": True,
+                        },
+                        attempt_number=attempt,
+                        max_attempts=max_attempts,
+                    )
+                ]
 
             # Use custom retry decorator with logging
             @retry_with_logging(table_config.retry, self.logger)

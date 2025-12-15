@@ -11,7 +11,7 @@ version: "1.0"
 replication_group: "delta_tables_defaults"
 
 cloud_url_mapping:
-  "abfss://aaboode@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/aaron2"
+  "abfss://aaboode@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/aaron2/"
 
 audit_config:
   audit_table: "data_replication.audit.audit_logging"

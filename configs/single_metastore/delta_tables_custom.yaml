@@ -7,7 +7,7 @@ version: "1.0"
 replication_group: "single_metastore_delta_tables_defaults"
 
 cloud_url_mapping:
-  "abfss://aaboode@oneenvadls.dfs.core.windows.net/": "abfss://deltalake@oneenvadls.dfs.core.windows.net/adnan"
+  "abfss://aaboode@oneenvadls.dfs.core.windows.net/": "abfss://deltalake@oneenvadls.dfs.core.windows.net/adnan/"
 
 audit_config:
   audit_table: "data_replication.audit.audit_logging"

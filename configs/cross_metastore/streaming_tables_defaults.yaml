@@ -19,9 +19,13 @@ backup_config:
   create_recipient: true
   create_share: true
   add_to_share: true
+  create_backup_share: true
+  create_dpm_backing_table_share: true  
 replication_config:
   enabled: true
   create_shared_catalog: true
+  create_backup_shared_catalog: true
+  create_dpm_backing_table_shared_catalog: true  
 
 concurrency:
   max_workers: 5

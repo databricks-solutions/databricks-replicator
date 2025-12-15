@@ -55,13 +55,18 @@ class ReplicationProvider(BaseProvider):
             workspace_client=self.workspace_client,
             auth_type=self.target_databricks_config.auth_type,
         )
-        # default driving spark is target spark. Create source spark for uc replication or if create_shared_catalog is True but source_databricks_connect_config.sharing_identifier is not provided
+        # default driving spark is target spark. Create source spark for uc replication or if create_shared_catalog is True but provider_name and source_databricks_connect_config.sharing_identifier is not provided
         if (
             self.catalog_config.uc_object_types
             and len(self.catalog_config.uc_object_types) > 0
         ) or (
             self.catalog_config.replication_config
-            and self.catalog_config.replication_config.create_shared_catalog
+            and (
+                self.catalog_config.replication_config.create_shared_catalog
+                or self.catalog_config.replication_config.create_dpm_backing_table_shared_catalog
+                or self.catalog_config.replication_config.create_backup_shared_catalog
+            )
+            and not self.catalog_config.replication_config.provider_name
             and not self.source_databricks_config.sharing_identifier
         ):
             source_host = self.source_databricks_config.host
@@ -138,23 +143,33 @@ class ReplicationProvider(BaseProvider):
                     replication_config.intermediate_catalog_location,
                 )
 
-            # Create source catalog from share if needed
+            # Create shared catalog from share if needed
             if (
                 replication_config.create_shared_catalog
-                or replication_config.dpm_backing_table_catalog
+                or replication_config.create_dpm_backing_table_shared_catalog
+                or replication_config.create_backup_shared_catalog
             ):
-                sharing_identifier = self.source_databricks_config.sharing_identifier
-                if not sharing_identifier:
-                    sharing_identifier = self.source_dbops.get_metastore_id()
-                provider_name = self.db_ops.get_provider_name(sharing_identifier)
+                if replication_config.provider_name:
+                    provider_name = replication_config.provider_name
+                else:
+                    sharing_identifier = (
+                        self.source_databricks_config.sharing_identifier
+                    )
+                    if not sharing_identifier:
+                        sharing_identifier = self.source_dbops.get_metastore_id()
+                    provider_name = self.db_ops.get_provider_name(sharing_identifier)
                 if replication_config.create_shared_catalog:
                     self.logger.info(
-                        f"""Creating source catalog from share: {replication_config.source_catalog} using share name: {replication_config.share_name}"""
+                        f"""Creating source catalog from: {replication_config.source_catalog} using share name: {replication_config.share_name}"""
                     )
                     self.db_ops.create_catalog_using_share_if_not_exists(
                         replication_config.source_catalog,
                         provider_name,
                         replication_config.share_name,
+                    )
+                if replication_config.create_backup_shared_catalog:
+                    self.logger.info(
+                        f"""Creating backup catalog from share: {replication_config.backup_catalog} using share name: {replication_config.backup_share_name}"""
                     )
                     if replication_config.backup_catalog:
                         self.db_ops.create_catalog_using_share_if_not_exists(
@@ -162,9 +177,9 @@ class ReplicationProvider(BaseProvider):
                             provider_name,
                             replication_config.backup_share_name,
                         )
-                if replication_config.dpm_backing_table_catalog:
+                if replication_config.create_dpm_backing_table_shared_catalog:
                     self.logger.info(
-                        f"""Creating DPM backing table catalog from share: {replication_config.dpm_backing_table_catalog} using share name: {replication_config.dpm_backing_table_share_name}"""
+                        f"""Creating DPM backing table catalog from: {replication_config.dpm_backing_table_catalog} using share name: {replication_config.dpm_backing_table_share_name}"""
                     )
                     self.db_ops.create_catalog_using_share_if_not_exists(
                         replication_config.dpm_backing_table_catalog,

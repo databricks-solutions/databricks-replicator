@@ -827,8 +827,6 @@ class DatabricksOperations:
             # Default schema is always included in shares
             if schema_name == "default":
                 return True
-
-            full_schema_name = f"`{catalog_name}`.`{schema_name}`"
             show_share_query = f"SHOW ALL IN SHARE `{share_name}`"
             full_schema_name = f"{catalog_name}.{schema_name}"
             result = (
@@ -846,6 +844,40 @@ class DatabricksOperations:
         except Exception as e:
             print(
                 f"""Warning: Could not check if schema `{catalog_name}.{schema_name}` is in share `{share_name}`: {e}"""
+            )
+            return False
+
+    def is_table_in_share(self, share_name: str, table_name: str) -> bool:
+        """
+        Check if table is already in the delta share.
+
+        Args:
+            share_name: Name of the share
+            catalog_name: Name of the catalog containing the schema
+            table_name: Name of the table to check
+
+        Returns:
+            True if table is in share, False otherwise
+        """
+        try:
+            full_table_name = ""
+            show_share_query = f"SHOW ALL IN SHARE `{share_name}`"
+            full_table_name = table_name.replace("`", "")
+            result = (
+                self.spark.sql(show_share_query)
+                .filter(f'''
+                        `shared_object` = "{full_table_name}"
+                        and `type` = "TABLE"''')
+                .count()
+            )
+
+            if result > 0:
+                return True
+            return False
+
+        except Exception as e:
+            print(
+                f"""Warning: Could not check if table {full_table_name} is in share `{share_name}`: {e}"""
             )
             return False
 
@@ -880,6 +912,25 @@ class DatabricksOperations:
         except Exception as e:
             raise Exception(
                 f"""Failed to add schema `{catalog_name}.{schema_name}` to share `{share_name}`: {str(e)}"""
+            ) from e
+
+    def get_shared_tables(self, share_name: str) -> List[str]:
+        """
+        Get all tables in a delta share.
+
+        Args:
+            share_name: Name of the share
+        Returns:
+            List of table names in the share
+        """
+        try:
+            query = f"select concat(catalog_name, '.', shared_as_schema, '.', shared_as_table) as table_name from system.information_schema.table_share_usage where share_name = '{share_name}'"
+            result_df = self.spark.sql(query)
+            return [row.table_name for row in result_df.collect()]
+
+        except Exception as e:
+            raise Exception(
+                f"""Failed to get shared tables in share `{share_name}`: {str(e)}"""
             ) from e
 
     def get_provider_name(self, sharing_identifier: str) -> str:
@@ -1118,7 +1169,6 @@ class DatabricksOperations:
             where table_catalog = '{catalog_name}' and table_schema = '{schema_name}' and table_name = '{table_name}'
             group by table_catalog, table_catalog, table_name""").collect()[0][0]
         return comment_maps_list
-
 
     def get_table_comments(self, catalog_name, schema_name, table_name):
         """
