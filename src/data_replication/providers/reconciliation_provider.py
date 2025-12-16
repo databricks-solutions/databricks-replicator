@@ -37,6 +37,9 @@ class ReconciliationProvider(BaseProvider):
             source_auth_type = self.source_databricks_config.auth_type
             source_secret_config = self.source_databricks_config.token
             source_cluster_id = self.source_databricks_config.cluster_id
+            self.logger.info(
+                f"Setting up source Spark session for reconciliation from host: {source_host}"
+            )
             self.source_spark = create_spark_session(
                 host=source_host,
                 secret_config=source_secret_config,

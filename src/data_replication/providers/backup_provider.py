@@ -42,6 +42,9 @@ class BackupProvider(BaseProvider):
             target_auth_type = self.target_databricks_config.auth_type
             target_secret_config = self.target_databricks_config.token
             target_cluster_id = self.target_databricks_config.cluster_id
+            self.logger.info(
+                f"Setting up target Spark session for backup operations on host: {target_host}"
+            )
             self.target_spark = create_spark_session(
                 host=target_host,
                 secret_config=target_secret_config,

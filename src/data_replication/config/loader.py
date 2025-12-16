@@ -65,7 +65,7 @@ class ConfigLoader:
                 (e.g., "table1,table2")
             target_volumes_override: Comma-separated string of volume names
                 (e.g., "volume1,volume2")
-            table_filter_expression_override: SQL filter expression to select tables
+            schema_table_filter_expression_override: SQL filter expression to select tables
                 (e.g., "tableName like 'fact_%'")
             concurrency_override: integer containing concurrency configuration override
             uc_object_types_override: List of UCObjectType enums to override in config
