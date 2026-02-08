@@ -30,6 +30,8 @@ class TableType(str, Enum):
     MANAGED = "managed"
     STREAMING_TABLE = "streaming_table"
     EXTERNAL = "external"
+    MATERIALIZED_VIEW = "materialized_view"
+    VIEW = "view"
     ALL = "all"
 
 
@@ -640,6 +642,8 @@ class ReplicationSystemConfig(BaseModel):
                 TableType.MANAGED,
                 TableType.EXTERNAL,
                 TableType.STREAMING_TABLE,
+                TableType.MATERIALIZED_VIEW,
+                TableType.VIEW,
             ]
 
         for catalog in self.target_catalogs:
@@ -649,6 +653,8 @@ class ReplicationSystemConfig(BaseModel):
                     TableType.MANAGED,
                     TableType.EXTERNAL,
                     TableType.STREAMING_TABLE,
+                    TableType.MATERIALIZED_VIEW,
+                    TableType.VIEW,
                 ]
             for schema in catalog.target_schemas or []:
                 # Expand schema-level table_types if it contains "all"
@@ -657,6 +663,8 @@ class ReplicationSystemConfig(BaseModel):
                         TableType.MANAGED,
                         TableType.EXTERNAL,
                         TableType.STREAMING_TABLE,
+                        TableType.MATERIALIZED_VIEW,
+                        TableType.VIEW,
                     ]
         return self
 

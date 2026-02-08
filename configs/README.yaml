@@ -40,7 +40,7 @@ external_location_config:
 # when table_types is provided, data in tables of specified types will be replicated.
 # when volume_types is provided, files in volumes of specified types will be replicated.
 
-# Optional: replication group level uc object types.
+# Optional: replication group level uc object types for uc metadata replication
 uc_object_types: [
     "all",
     "storage_credential",
@@ -58,13 +58,16 @@ uc_object_types: [
     "column_tag",
     "column_comment",
     "materialized_view",
-    "streaming_table"
+    "streaming_table",
     # "permission"
   ]
 
-# Optional: replication group level table types.
-# supported types: all, streaming_table, managed, external.
-table_types: ["all", "managed", "streaming_table", "external"]
+# Optional: replication group level table types for data replication or reconciliation
+# supported types: all, streaming_table, managed, external, materialized_view, view
+# for replication operation, materialized view and views will be excluded from replication 
+# for reconciliation operation, views will be excluded from reconciliation
+table_types:
+  ["all", "managed", "streaming_table", "external", "materialized_view", "view"]
 
 # Optional: replication group level volume types.
 # supported volume types: all, managed, external.
@@ -134,7 +137,7 @@ replication_config:
   # Optional: whether to overwrite comments during replication. default is true.
   overwrite_comments: true
   # uc metadata specific configurations end here: ------------------------
-  
+
   # Data Replication specific configurations start here: ------------------------
   # Optional: whether to replicate the catalog if it does not exist on target.default is false.
   create_target_catalog: false
@@ -165,7 +168,7 @@ replication_config:
   # Optional: catalog created from backing table share. default to __replication_internal_<catalog_name>_from_<source_databricks_connect_config.name>_shared
   backup_catalog: "__replication_internal_catalog_example_from_azure_shared"
   # Optional: whether to create dpm backing table shared catalog on target. default is false.
-  create_dpm_backing_table_shared_catalog: false  
+  create_dpm_backing_table_shared_catalog: false
   # Optional: backing table share name for dpm dlt backing table. default to __replication_internal_dpm_<catalog_name>_to_<target_databricks_connect_config.name>_share
   dpm_backing_table_share_name: "__replication_internal_dpm_catalog_example_to_aws_share"
   # Optional: catalog created from dpm dlt backing table share. default to __replication_internal_dpm_<catalog_name>_from_<source_databricks_connect_config.name>_shared

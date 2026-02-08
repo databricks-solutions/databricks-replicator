@@ -41,6 +41,16 @@ This system provides incremental data and UC metadata replication capabilities b
 | DLT Streaming Tables (data only, no checkpoints) | Supported | checkpoints not replicated. state handling should be managed seperately.
 | DLT Materialized Views | Not Supported | DLT MV should be recomputed by DLT in target
 
+### Data Reconciliation
+
+| Object Type | Status |Comments|
+|-------------|--------|--------|
+| Managed Tables | Supported |
+| External Tables | Supported | 
+| DLT Streaming Tables | Supported | 
+| DLT Materialized Views | Supported | 
+| Views | Not Supported | 
+| Volume Files | Not Supported |
 
 ### Other Unsupported Objects
 - Databricks Workspace Assets is not yet supported, but maybe considered in future roadmap

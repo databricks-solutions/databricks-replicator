@@ -285,6 +285,13 @@ class DatabricksOperations:
                 return table_name, False
 
         filtered_tables = []
+        if parallel_table_filter <= 1 or len(table_names) == 1:
+            # If parallel processing is not desired or only one table, process sequentially
+            for table_name in table_names:
+                table_name, is_included = check_table_type(table_name)
+                if is_included:
+                    filtered_tables.append(table_name)
+            return filtered_tables
 
         # Use ThreadPoolExecutor for parallel processing
         with ThreadPoolExecutor(max_workers=parallel_table_filter) as executor:
@@ -457,25 +464,34 @@ class DatabricksOperations:
         Returns:
             Dictionary containing table details
         """
-        try:
+        # First check if it's a view to avoid DESCRIBE DETAIL error
+        describe_extended_df = self.spark.sql(f"DESCRIBE EXTENDED {table_name}")
+        type_rows = describe_extended_df.filter(col("col_name") == "Type").collect()
+
+        if type_rows:
+            # If it's a view or materialized view, get table properties from DESCRIBE EXTENDED as DESCRIBE DETAIL doesn't work for views
+            if type_rows[0][1].upper() in ["VIEW", "MATERIALIZED_VIEW"]:
+                table_property_df = describe_extended_df.filter(
+                    col("col_name") == "Table Properties"
+                )
+                if table_property_df.isEmpty():
+                    return {"properties": {}}
+                details_str = table_property_df.select("data_type").collect()[0][0]
+                properties = {}
+                if details_str:
+                    result_clean = details_str.replace("[", "").replace("]", "")
+                    properties = dict(
+                        item.split("=")
+                        for item in result_clean.split(",")
+                        if "=" in item
+                    )
+                return {"properties": properties}
+
+            # If it's not a view, get details using DESCRIBE DETAIL
             details = (
                 self.spark.sql(f"DESCRIBE DETAIL {table_name}").collect()[0].asDict()
             )
             return details
-
-        except Exception:
-            details_str = (
-                self.spark.sql(f"DESCRIBE EXTENDED {table_name}")
-                .filter(col("col_name") == "Table Properties")
-                .select("data_type")
-                .collect()[0][0]
-            )
-            properties = {}
-            result_clean = details_str.replace("[", "").replace("]", "")
-            properties = dict(
-                item.split("=") for item in result_clean.split(",") if "=" in item
-            )
-            return {"properties": properties}
 
     @retry_with_logging(retry_config=RetryConfig(max_attempts=5, retry_delay_seconds=2))
     def refresh_table_metadata(self, table_name: str) -> bool:
@@ -1609,10 +1625,14 @@ class DatabricksOperations:
             raise Exception("WorkspaceClient is required for catalog operations")
 
         try:
-            source_table_info = self.workspace_client.tables.get(table_name.replace("`", ""))
+            source_table_info = self.workspace_client.tables.get(
+                table_name.replace("`", "")
+            )
             return source_table_info
         except Exception as e:
-            raise TableNotFoundError(f"Failed to get source table {table_name}: {str(e)}") from e
+            raise TableNotFoundError(
+                f"Failed to get source table {table_name}: {str(e)}"
+            ) from e
 
     def get_view_definition(self, table_name: str) -> str | None:
         """
@@ -1649,30 +1669,32 @@ class DatabricksOperations:
             raise Exception("WorkspaceClient is required for SQL warehouse operations")
 
         try:
-            
-            warehouse_name = warehouse_config.get('name',None)
+            warehouse_name = warehouse_config.get("name", None)
             if warehouse_name:
                 # use existing warehouse if exists
-                if warehouse_config.get('create_if_not_exists', True):
+                if warehouse_config.get("create_if_not_exists", True):
                     # Check if a warehouse with the same name already exists
-                    existing_warehouses = list(
-                        self.workspace_client.warehouses.list()
-                    )
+                    existing_warehouses = list(self.workspace_client.warehouses.list())
                     for wh in existing_warehouses:
                         if wh.name == warehouse_name:
                             return wh.id, wh.name
             else:
                 # generate unique warehouse name
-                warehouse_name = f'replication-{time.time_ns()}'
+                warehouse_name = f"replication-{time.time_ns()}"
 
-            wh_type = CreateWarehouseRequestWarehouseType(warehouse_config.get('warehouse_type').value)
-            created_warehouse = self.workspace_client.warehouses.create(name=warehouse_name,
-                                       cluster_size=warehouse_config.get('cluster_size','X-Small'),
-                                       max_num_clusters=warehouse_config.get('max_num_clusters',1),
-                                       auto_stop_mins=warehouse_config.get('auto_stop_mins',10),
-                                       warehouse_type=wh_type,
-                                       enable_serverless_compute=warehouse_config.get('enable_serverless_compute',True),
-                                       ).result()
+            wh_type = CreateWarehouseRequestWarehouseType(
+                warehouse_config.get("warehouse_type").value
+            )
+            created_warehouse = self.workspace_client.warehouses.create(
+                name=warehouse_name,
+                cluster_size=warehouse_config.get("cluster_size", "X-Small"),
+                max_num_clusters=warehouse_config.get("max_num_clusters", 1),
+                auto_stop_mins=warehouse_config.get("auto_stop_mins", 10),
+                warehouse_type=wh_type,
+                enable_serverless_compute=warehouse_config.get(
+                    "enable_serverless_compute", True
+                ),
+            ).result()
             return created_warehouse.id, created_warehouse.name
         except Exception as e:
             raise Exception(f"Failed to create SQL warehouse: {str(e)}") from e

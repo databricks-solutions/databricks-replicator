@@ -318,12 +318,13 @@ class BackupProvider(BaseProvider):
 
         try:
             table_details = self.db_ops.get_table_details(source_table)
+            table_type = self.db_ops.get_table_type(source_table)
             actual_source_table = table_details.get("table_name", None)
             dlt_flag = table_details.get("is_dlt", None)
             dlt_type = table_details.get("dlt_type", None)
 
             if dlt_flag:
-                if dlt_type == "legacy" and backup_config.backup_catalog:
+                if dlt_type == "legacy" and table_type.lower() == "streaming_table" and backup_config.backup_catalog:
                     if not backup_config.backup_legacy_backing_tables:
                         self.logger.info(
                             f"Skipping backup for legacy dlt backing table as per configuration: {source_table}",
@@ -343,7 +344,7 @@ class BackupProvider(BaseProvider):
                                     """
                     step2_query = f"""ALTER TABLE {backup_table}
                                     UNSET TBLPROPERTIES (spark.sql.internal.pipelines.parentTableId)"""
-                elif dlt_type == "dpm":
+                elif dlt_type == "dpm" and table_type.lower() == "streaming_table":
                     self.logger.info(
                         f"Starting adding dpm dlt backing table to share: {source_table}",
                         extra={"run_id": self.run_id, "operation": "backup"},
@@ -392,9 +393,11 @@ class BackupProvider(BaseProvider):
                     step1_query = f"""ALTER SHARE {dpm_backing_table_share_name}
                                     ADD TABLE {actual_source_table} AS {schema_name}.{table_name};"""
                 else:
-                    raise BackupError(
-                        f"Unsupported DLT type for backup: {dlt_type} for table {source_table}"
+                    self.logger.info(
+                        f"Skipping backup for {table_type}: {source_table}",
+                        extra={"run_id": self.run_id, "operation": "backup"},
                     )
+                    return []
             else:
                 self.logger.info(
                     f"Skipping backup for non-DLT table: {source_table}",

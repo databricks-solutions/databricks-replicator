@@ -1259,63 +1259,79 @@ class BaseProvider(ABC):
                     f"Exclude {len(table_names_unprocessed) - len(table_names_unshared)} already shared tables from {len(table_names_unprocessed)} tables"
                 )
 
-        table_types = []
-        # get table type filters from schema configuration
-        if schema_config.table_types and len(schema_config.table_types) > 0:
-            table_types = [
-                table_type.value.lower() for table_type in schema_config.table_types
-            ]
-        # create table type filters based on uc_object_types
-        if schema_config.uc_object_types:
-            table_types_set = set()
-            if UCObjectType.ALL in schema_config.uc_object_types:
-                table_types_set.update(
-                    [
-                        "managed",
-                        "external",
-                        "streaming_table",
-                        "view",
-                        "materialized_view",
-                    ]
-                )
-            if (
-                UCObjectType.TABLE_TAG in schema_config.uc_object_types
-                or UCObjectType.COLUMN_TAG in schema_config.uc_object_types
-                or UCObjectType.COLUMN_COMMENT in schema_config.uc_object_types
-            ):
-                table_types_set.update(
-                    [
-                        "managed",
-                        "external",
-                        "streaming_table",
-                        "view",
-                        "materialized_view",
-                    ]
-                )
-            if UCObjectType.TABLE_COMMENT in schema_config.uc_object_types:
-                table_types_set.update(["managed", "external", "view"])
-            if UCObjectType.TABLE in schema_config.uc_object_types:
-                table_types_set.update(["managed", "external"])
-            if UCObjectType.VIEW in schema_config.uc_object_types:
-                table_types_set.update(["view"])
-            if UCObjectType.MATERIALIZED_VIEW in schema_config.uc_object_types:
-                table_types_set.update(["materialized_view"])
-            if UCObjectType.STREAMING_TABLE in schema_config.uc_object_types:
-                table_types_set.update(["streaming_table"])                
-            if table_types_set:
-                table_types = list(table_types_set)
+        filtered_table_names = table_names_unshared
+        # ignore table type filtering for backup operation as it will only handle dlt tables
+        if self.get_operation_name() != "backup":
+            table_types = []
+            # get table type filters from schema configuration
+            if schema_config.table_types and len(schema_config.table_types) > 0:
+                # Exclude MATERIALIZED_VIEW and VIEW for replication operation as they are not supported
+                if self.get_operation_name() in ("replication"):
+                    self.logger.warning(
+                        "Excluding MATERIALIZED_VIEW and VIEW table types for replication operation as they are not supported."
+                    )
+                    schema_config.table_types.remove(TableType.MATERIALIZED_VIEW)
+                    schema_config.table_types.remove(TableType.VIEW)
+                # Exclude VIEW for reconciliation operation as they are not supported
+                if self.get_operation_name() in ("reconciliation"):
+                    self.logger.warning(
+                        "Excluding VIEW table type for reconciliation operation as it is not supported."
+                    )
+                    schema_config.table_types.remove(TableType.VIEW)
+                table_types = [
+                    table_type.value.lower() for table_type in schema_config.table_types
+                ]
+            # create table type filters based on uc_object_types
+            if schema_config.uc_object_types:
+                table_types_set = set()
+                # if UCObjectType.ALL in schema_config.uc_object_types:
+                #     table_types_set.update(
+                #         [
+                #             "managed",
+                #             "external",
+                #             "streaming_table",
+                #             "view",
+                #             "materialized_view",
+                #         ]
+                #     )
+                # if (
+                #     UCObjectType.TABLE_TAG in schema_config.uc_object_types
+                #     or UCObjectType.COLUMN_TAG in schema_config.uc_object_types
+                #     or UCObjectType.COLUMN_COMMENT in schema_config.uc_object_types
+                # ):
+                #     table_types_set.update(
+                #         [
+                #             "managed",
+                #             "external",
+                #             "streaming_table",
+                #             "view",
+                #             "materialized_view",
+                #         ]
+                #     )
+                if UCObjectType.TABLE_COMMENT in schema_config.uc_object_types:
+                    table_types_set.update(["managed", "external", "view"])
+                if UCObjectType.TABLE in schema_config.uc_object_types:
+                    table_types_set.update(["managed", "external"])
+                if UCObjectType.VIEW in schema_config.uc_object_types:
+                    table_types_set.update(["view"])
+                if UCObjectType.MATERIALIZED_VIEW in schema_config.uc_object_types:
+                    table_types_set.update(["materialized_view"])
+                if UCObjectType.STREAMING_TABLE in schema_config.uc_object_types:
+                    table_types_set.update(["streaming_table"])
+                if table_types_set:
+                    table_types = list(table_types_set)
 
-        filtered_table_names = self.db_ops.filter_tables_by_type(
-            self.catalog_name,
-            schema_name,
-            table_names_unshared,
-            table_types,
-            schema_config.concurrency.parallel_table_filter,
-        )
-        if len(filtered_table_names) != len(table_names_unshared):
-            self.logger.info(
-                f"Exclude {len(table_names_unshared) - len(filtered_table_names)} table types unmatched tables from {len(table_names_unshared)} tables"
+            filtered_table_names = self.db_ops.filter_tables_by_type(
+                self.catalog_name,
+                schema_name,
+                table_names_unshared,
+                table_types,
+                schema_config.concurrency.parallel_table_filter,
             )
+            if len(filtered_table_names) != len(table_names_unshared):
+                self.logger.info(
+                    f"Exclude {len(table_names_unshared) - len(filtered_table_names)} table types unmatched tables from {len(table_names_unshared)} tables"
+                )
         # Then filter by table types
         return [table for table in tables if table.table_name in filtered_table_names]
 
