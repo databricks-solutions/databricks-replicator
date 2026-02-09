@@ -1265,49 +1265,18 @@ class BaseProvider(ABC):
             table_types = []
             # get table type filters from schema configuration
             if schema_config.table_types and len(schema_config.table_types) > 0:
-                # Exclude MATERIALIZED_VIEW and VIEW for replication operation as they are not supported
-                if self.get_operation_name() in ("replication"):
+                # Exclude MATERIALIZED_VIEW for replication operation as it is not supported
+                if self.get_operation_name() in ("replication") and TableType.MATERIALIZED_VIEW in schema_config.table_types:
                     self.logger.warning(
-                        "Excluding MATERIALIZED_VIEW and VIEW table types for replication operation as they are not supported."
+                        "Excluding MATERIALIZED_VIEW table type for replication operation as it is not supported."
                     )
                     schema_config.table_types.remove(TableType.MATERIALIZED_VIEW)
-                    schema_config.table_types.remove(TableType.VIEW)
-                # Exclude VIEW for reconciliation operation as they are not supported
-                if self.get_operation_name() in ("reconciliation"):
-                    self.logger.warning(
-                        "Excluding VIEW table type for reconciliation operation as it is not supported."
-                    )
-                    schema_config.table_types.remove(TableType.VIEW)
                 table_types = [
                     table_type.value.lower() for table_type in schema_config.table_types
                 ]
             # create table type filters based on uc_object_types
             if schema_config.uc_object_types:
                 table_types_set = set()
-                # if UCObjectType.ALL in schema_config.uc_object_types:
-                #     table_types_set.update(
-                #         [
-                #             "managed",
-                #             "external",
-                #             "streaming_table",
-                #             "view",
-                #             "materialized_view",
-                #         ]
-                #     )
-                # if (
-                #     UCObjectType.TABLE_TAG in schema_config.uc_object_types
-                #     or UCObjectType.COLUMN_TAG in schema_config.uc_object_types
-                #     or UCObjectType.COLUMN_COMMENT in schema_config.uc_object_types
-                # ):
-                #     table_types_set.update(
-                #         [
-                #             "managed",
-                #             "external",
-                #             "streaming_table",
-                #             "view",
-                #             "materialized_view",
-                #         ]
-                #     )
                 if UCObjectType.TABLE_COMMENT in schema_config.uc_object_types:
                     table_types_set.update(["managed", "external", "view"])
                 if UCObjectType.TABLE in schema_config.uc_object_types:

@@ -20,8 +20,6 @@ from databricks.sdk.service.catalog import (
     TableInfo,
 )
 from databricks.sdk.service.sql import CreateWarehouseRequestWarehouseType
-from pyspark.sql.functions import col
-
 from data_replication.audit.logger import DataReplicationLogger
 from data_replication.config.models import (
     RetryConfig,
@@ -270,9 +268,9 @@ class DatabricksOperations:
         Returns:
             List of table names that are of the selected types
         """
-
+        # If no table types specified, return original list
         if table_types is None or len(table_types) == 0 or len(table_names) == 0:
-            return []
+            return table_names
 
         def check_table_type(table_name: str) -> tuple[str, bool]:
             """Check if table type is in allowed types"""
@@ -466,13 +464,15 @@ class DatabricksOperations:
         """
         # First check if it's a view to avoid DESCRIBE DETAIL error
         describe_extended_df = self.spark.sql(f"DESCRIBE EXTENDED {table_name}")
-        type_rows = describe_extended_df.filter(col("col_name") == "Type").collect()
+        type_rows = describe_extended_df.filter(
+            describe_extended_df["col_name"] == "Type"
+        ).collect()
 
         if type_rows:
             # If it's a view or materialized view, get table properties from DESCRIBE EXTENDED as DESCRIBE DETAIL doesn't work for views
             if type_rows[0][1].upper() in ["VIEW", "MATERIALIZED_VIEW"]:
                 table_property_df = describe_extended_df.filter(
-                    col("col_name") == "Table Properties"
+                    describe_extended_df["col_name"] == "Table Properties"
                 )
                 if table_property_df.isEmpty():
                     return {"properties": {}}
@@ -519,16 +519,16 @@ class DatabricksOperations:
         if self.spark.catalog.tableExists(table_name):
             # First check if it's a view using DESCRIBE EXTENDED to avoid DESCRIBE DETAIL error
             try:
+                df = self.spark.sql(f"DESCRIBE EXTENDED {table_name}")
                 table_type = (
-                    self.spark.sql(f"DESCRIBE EXTENDED {table_name}")
-                    .filter(
-                        (col("col_name") == "Type")
+                    df.filter(
+                        (df["col_name"] == "Type")
                         & (
-                            (col("data_type").contains("MANAGED"))
-                            | (col("data_type").contains("EXTERNAL"))
-                            | (col("data_type").contains("STREAMING_TABLE"))
-                            | (col("data_type").contains("MATERIALIZED_VIEW"))
-                            | (col("data_type").contains("VIEW"))
+                            (df["data_type"].contains("MANAGED"))
+                            | (df["data_type"].contains("EXTERNAL"))
+                            | (df["data_type"].contains("STREAMING_TABLE"))
+                            | (df["data_type"].contains("MATERIALIZED_VIEW"))
+                            | (df["data_type"].contains("VIEW"))
                         )
                     )
                     .select("data_type")

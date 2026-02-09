@@ -64,10 +64,9 @@ uc_object_types: [
 
 # Optional: replication group level table types for data replication or reconciliation
 # supported types: all, streaming_table, managed, external, materialized_view, view
-# for replication operation, materialized view and views will be excluded from replication 
-# for reconciliation operation, views will be excluded from reconciliation
+# for replication operation, materialized view will be excluded from replication 
 table_types:
-  ["all", "managed", "streaming_table", "external", "materialized_view", "view"]
+  ["all", "managed", "streaming_table", "external", "materialized_view"]
 
 # Optional: replication group level volume types.
 # supported volume types: all, managed, external.
