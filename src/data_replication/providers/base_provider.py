@@ -1265,8 +1265,8 @@ class BaseProvider(ABC):
             table_types = []
             # get table type filters from schema configuration
             if schema_config.table_types and len(schema_config.table_types) > 0:
-                # Exclude MATERIALIZED_VIEW and VIEW for replication operation as they are not supported
-                if self.get_operation_name() in ("replication"):
+                # Exclude MATERIALIZED_VIEW for replication operation as it is not supported
+                if self.get_operation_name() in ("replication") and TableType.MATERIALIZED_VIEW in schema_config.table_types:
                     self.logger.warning(
                         "Excluding MATERIALIZED_VIEW table type for replication operation as it is not supported."
                     )
