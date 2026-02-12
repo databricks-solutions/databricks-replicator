@@ -271,7 +271,6 @@ class DatabricksOperations:
         # If no table types specified, return original list
         if table_types is None or len(table_types) == 0 or len(table_names) == 0:
             return table_names
-
         def check_table_type(table_name: str) -> tuple[str, bool]:
             """Check if table type is in allowed types"""
             try:
@@ -287,6 +286,7 @@ class DatabricksOperations:
             # If parallel processing is not desired or only one table, process sequentially
             for table_name in table_names:
                 table_name, is_included = check_table_type(table_name)
+                print(f"table: {table_name}, included: {is_included}")
                 if is_included:
                     filtered_tables.append(table_name)
             return filtered_tables
@@ -517,45 +517,22 @@ class DatabricksOperations:
         self.refresh_table_metadata(table_name)
 
         if self.spark.catalog.tableExists(table_name):
-            # First check if it's a view using DESCRIBE EXTENDED to avoid DESCRIBE DETAIL error
-            try:
-                df = self.spark.sql(f"DESCRIBE EXTENDED {table_name}")
-                table_type = (
-                    df.filter(
-                        (df["col_name"] == "Type")
-                        & (
-                            (df["data_type"].contains("MANAGED"))
-                            | (df["data_type"].contains("EXTERNAL"))
-                            | (df["data_type"].contains("STREAMING_TABLE"))
-                            | (df["data_type"].contains("MATERIALIZED_VIEW"))
-                            | (df["data_type"].contains("VIEW"))
-                        )
-                    )
-                    .select("data_type")
-                    .collect()[0][0]
-                )
-                if table_type != "MANAGED":
-                    return table_type
-            except Exception:
-                pass
-            # when it's Managed, check if it's STREAMING_TABLE as it may be a backup table
-            pipeline_id = (
-                self.spark.sql(f"DESCRIBE DETAIL {table_name}")
-                .collect()[0]
-                .asDict()["properties"]
-                .get("pipelines.pipelineId", None)
+            table_details = self.workspace_client.tables.get(
+                full_name=table_name.replace("`", "")
             )
+            table_type = table_details.table_type.value
+            if table_type != "MANAGED":
+                return table_type
+
+            # when it's Managed, check if it's STREAMING_TABLE as it may be a backup table
+            pipeline_id = table_details.pipeline_id
             if pipeline_id:
                 table_type = "STREAMING_TABLE"
                 return table_type
 
             # when it's Managed, check if it's EXTERNAL
             # as it may be an external table when delta shared
-            location = (
-                self.spark.sql(f"DESCRIBE DETAIL {table_name}")
-                .collect()[0]
-                .asDict()["location"]
-            )
+            location = table_details.storage_location
             if location and "/tables/" in location:
                 table_type = "MANAGED"
                 return table_type

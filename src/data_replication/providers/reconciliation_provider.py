@@ -14,6 +14,7 @@ from ..config.models import RunResult, SchemaConfig, TableConfig
 from ..exceptions import ReconciliationError, TableNotFoundError
 from ..utils import (
     create_spark_session,
+    create_workspace_client,
     get_workspace_url_from_host,
     recursive_substitute,
     retry_with_logging,
@@ -27,6 +28,22 @@ class ReconciliationProvider(BaseProvider):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.source_spark = None
+        self.source_dbops = None
+        self.target_spark = None
+        self.target_dbops = None
+        self.target_workspace_client = create_workspace_client(
+            host=self.target_databricks_config.host,
+            secret_config=self.target_databricks_config.token,
+            workspace_client=self.workspace_client,
+            auth_type=self.target_databricks_config.auth_type,
+        )
+        # set target spark and dbops to current spark and dbops
+        self.target_spark = self.spark
+        self.target_dbops = DatabricksOperations(
+            self.target_spark, self.logger, self.target_workspace_client
+        )
+        self.db_ops = self.target_dbops
         # Setup source Spark session if create_shared_catalog is True but source_databricks_connect_config.sharing_identifier is not provided
         if (
             self.catalog_config.reconciliation_config
@@ -198,7 +215,8 @@ class ReconciliationProvider(BaseProvider):
         source_table = f"{source_catalog}.{schema_name}.{table_name}"
         target_table = f"{target_catalog}.{schema_name}.{table_name}"
         retry = table_config.retry
-
+        table_type = None
+        
         self.logger.info(
             f"Starting reconciliation: {source_table} vs {target_table}",
             extra={"run_id": self.run_id, "operation": "reconciliation"},
@@ -208,6 +226,8 @@ class ReconciliationProvider(BaseProvider):
             # Check if source table exists
             if not self.spark.catalog.tableExists(source_table):
                 raise TableNotFoundError(f"Source table does not exist: {source_table}")
+            # Get source table type to determine replication strategy
+            table_type = self.db_ops.get_table_type(source_table).lower()
             # Check if target table exists
             if not self.spark.catalog.tableExists(target_table):
                 raise TableNotFoundError(f"Target table does not exist: {target_table}")
@@ -409,13 +429,14 @@ class ReconciliationProvider(BaseProvider):
                         catalog_name=target_catalog,
                         schema_name=schema_name,
                         object_name=table_name,
-                        object_type="table",
+                        object_type='table',
                         status="success",
                         start_time=start_time.isoformat(),
                         end_time=end_time.isoformat(),
                         details={
                             "source_table": source_table,
                             "target_table": target_table,
+                            "table_type": table_type,
                             "reconciliation_results": reconciliation_results,
                             "failed_checks": failed_checks,
                             "skipped_checks": skipped_checks,
@@ -463,7 +484,7 @@ class ReconciliationProvider(BaseProvider):
                         catalog_name=target_catalog,
                         schema_name=schema_name,
                         object_name=table_name,
-                        object_type="table",
+                        object_type='table',
                         status="failed",
                         start_time=start_time.isoformat(),
                         end_time=end_time.isoformat(),
@@ -471,6 +492,7 @@ class ReconciliationProvider(BaseProvider):
                         details={
                             "source_table": source_table,
                             "target_table": target_table,
+                            "table_type": table_type,
                             "reconciliation_results": reconciliation_results,
                             "failed_checks": failed_checks,
                             "skipped_checks": skipped_checks,
@@ -499,6 +521,7 @@ class ReconciliationProvider(BaseProvider):
                     catalog_name=target_catalog,
                     schema_name=schema_name,
                     object_name=table_name,
+                    object_type='table',
                     status="failed",
                     start_time=start_time.isoformat(),
                     end_time=end_time.isoformat(),
@@ -507,6 +530,7 @@ class ReconciliationProvider(BaseProvider):
                     details={
                         "source_table": source_table,
                         "target_table": target_table,
+                        "table_type": table_type,
                     },
                 )
             ]
@@ -616,7 +640,7 @@ class ReconciliationProvider(BaseProvider):
                     "max_attempts": max_attempts,
                 }
 
-            mismatch_count = result.select('num_inserted_rows').collect()[0][0]
+            mismatch_count = result.select("num_inserted_rows").collect()[0][0]
             # Check if there are any mismatches for this specific table
             # mismatch_count_df = self.spark.sql(
             #     f"""

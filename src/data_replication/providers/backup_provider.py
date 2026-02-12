@@ -14,6 +14,7 @@ from ..config.models import RunResult, SchemaConfig, TableConfig, TableType
 from ..exceptions import BackupError
 from ..utils import (
     create_spark_session,
+    create_workspace_client,
     get_workspace_url_from_host,
     retry_with_logging,
     validate_spark_session,
@@ -27,6 +28,15 @@ class BackupProvider(BaseProvider):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.source_workspace_client = create_workspace_client(
+            host=self.source_databricks_config.host,
+            secret_config=self.source_databricks_config.token,
+            workspace_client=self.workspace_client,
+            auth_type=self.source_databricks_config.auth_type,
+        )
+        self.db_ops = DatabricksOperations(
+            self.spark, self.logger, self.source_workspace_client
+        )
         # Setup target Spark session if create_recipient or create_share is True but target_databricks_connect_config.sharing_identifier is not provided
         if (
             self.catalog_config.backup_config
@@ -55,7 +65,15 @@ class BackupProvider(BaseProvider):
             validate_spark_session(
                 self.target_spark, get_workspace_url_from_host(target_host)
             )
-            self.target_dbops = DatabricksOperations(self.target_spark, self.logger)
+            self.target_workspace_client = create_workspace_client(
+                host=self.target_databricks_config.host,
+                secret_config=self.target_databricks_config.token,
+                workspace_client=self.workspace_client,
+                auth_type=self.target_databricks_config.auth_type,
+            )
+            self.target_dbops = DatabricksOperations(
+                self.target_spark, self.logger, self.target_workspace_client
+            )
 
         if (
             self.catalog_config.backup_config
@@ -315,16 +333,21 @@ class BackupProvider(BaseProvider):
         step2_query = None
         attempt = 1
         max_attempts = table_config.retry.max_attempts
+        table_type = None
 
         try:
             table_details = self.db_ops.get_table_details(source_table)
-            table_type = self.db_ops.get_table_type(source_table)
+            table_type = self.db_ops.get_table_type(source_table).lower()
             actual_source_table = table_details.get("table_name", None)
             dlt_flag = table_details.get("is_dlt", None)
             dlt_type = table_details.get("dlt_type", None)
 
             if dlt_flag:
-                if dlt_type == "legacy" and table_type.lower() == "streaming_table" and backup_config.backup_catalog:
+                if (
+                    dlt_type == "legacy"
+                    and table_type == "streaming_table"
+                    and backup_config.backup_catalog
+                ):
                     if not backup_config.backup_legacy_backing_tables:
                         self.logger.info(
                             f"Skipping backup for legacy dlt backing table as per configuration: {source_table}",
@@ -344,7 +367,7 @@ class BackupProvider(BaseProvider):
                                     """
                     step2_query = f"""ALTER TABLE {backup_table}
                                     UNSET TBLPROPERTIES (spark.sql.internal.pipelines.parentTableId)"""
-                elif dlt_type == "dpm" and table_type.lower() == "streaming_table":
+                elif dlt_type == "dpm" and table_type == "streaming_table":
                     self.logger.info(
                         f"Starting adding dpm dlt backing table to share: {source_table}",
                         extra={"run_id": self.run_id, "operation": "backup"},
@@ -373,6 +396,7 @@ class BackupProvider(BaseProvider):
                                     "backup_table": backup_table,
                                     "backup_schema_name": backup_schema_name,
                                     "source_table": actual_source_table,
+                                    "table_type": table_type,
                                     "dlt_type": dlt_type,
                                     "step1_query": step1_query,
                                     "step2_query": step2_query,
@@ -451,6 +475,7 @@ class BackupProvider(BaseProvider):
                             "backup_table": backup_table,
                             "backup_schema_name": backup_schema_name,
                             "source_table": actual_source_table,
+                            "table_type": table_type,
                             "dlt_type": dlt_type,
                             "step1_query": step1_query,
                             "step2_query": step2_query,
@@ -491,6 +516,7 @@ class BackupProvider(BaseProvider):
                         "backup_schema_name": backup_schema_name,
                         "source_table": actual_source_table,
                         "dlt_type": dlt_type,
+                        "table_type": table_type,
                         "step1_query": step1_query,
                         "step2_query": step2_query,
                         "backup_schema_prefix": backup_config.backup_schema_prefix,
@@ -532,6 +558,7 @@ class BackupProvider(BaseProvider):
                         "backup_schema_name": backup_schema_name,
                         "source_table": actual_source_table,
                         "dlt_type": dlt_type,
+                        "table_type": table_type,
                         "step1_query": step1_query,
                         "step2_query": step2_query,
                         "backup_schema_prefix": backup_config.backup_schema_prefix,

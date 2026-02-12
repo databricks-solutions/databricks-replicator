@@ -60,6 +60,12 @@ class ReplicationProvider(BaseProvider):
             workspace_client=self.workspace_client,
             auth_type=self.target_databricks_config.auth_type,
         )
+        # set target spark and dbops to current spark and dbops
+        self.target_spark = self.spark
+        self.target_dbops = DatabricksOperations(
+            self.target_spark, self.logger, self.target_workspace_client
+        )
+        self.db_ops = self.target_dbops
         # default driving spark is target spark. Create source spark for uc replication or if create_shared_catalog is True but provider_name and source_databricks_connect_config.sharing_identifier is not provided
         if (
             self.catalog_config.uc_object_types
@@ -107,10 +113,6 @@ class ReplicationProvider(BaseProvider):
             and len(self.catalog_config.uc_object_types) > 0
         ):
             # set target spark and dbops to current spark and dbops
-            self.target_spark = self.spark
-            self.target_dbops = DatabricksOperations(
-                self.target_spark, self.logger, self.target_workspace_client
-            )
             self.spark = self.source_spark
             self.db_ops = self.source_dbops
 
@@ -393,7 +395,7 @@ class ReplicationProvider(BaseProvider):
 
             # Get source table type to determine replication strategy
             source_table_type = self.db_ops.get_table_type(source_table)
-            if source_table_type.upper() == 'STREAMING_TABLE':
+            if source_table_type.upper() == "STREAMING_TABLE":
                 table_exists = False
                 # For streaming tables, check if DPM backing table catalog is specified and use it as source if the table exists there
                 if replication_config.dpm_backing_table_catalog:
