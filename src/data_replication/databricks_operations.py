@@ -273,13 +273,9 @@ class DatabricksOperations:
             return table_names
         def check_table_type(table_name: str) -> tuple[str, bool]:
             """Check if table type is in allowed types"""
-            try:
-                full_table_name = f"`{catalog_name}`.`{schema_name}`.`{table_name}`"
-                table_type = self.get_table_type(full_table_name).lower()
-                return table_name, table_type in table_types
-            except Exception:
-                # If we can't determine the type, exclude the table
-                return table_name, False
+            full_table_name = f"`{catalog_name}`.`{schema_name}`.`{table_name}`"
+            table_type = self.get_table_type(full_table_name).lower()
+            return table_name, table_type in table_types
 
         filtered_tables = []
         if parallel_table_filter <= 1 or len(table_names) == 1:
