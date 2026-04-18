@@ -20,6 +20,7 @@ from databricks.sdk.service.catalog import (
     TableInfo,
 )
 from databricks.sdk.service.sql import CreateWarehouseRequestWarehouseType
+from databricks.sdk.service.tags import TagPolicy, Value
 from data_replication.audit.logger import DataReplicationLogger
 from data_replication.config.models import (
     RetryConfig,
@@ -1561,6 +1562,130 @@ class DatabricksOperations:
             return updated_external_location
         except Exception as e:
             raise Exception(f"Failed to update external location: {str(e)}") from e
+
+    def list_tag_policies(self) -> List[TagPolicy]:
+        """
+        List all tag policies using workspace client.
+
+        Returns:
+            List of TagPolicy objects
+
+        Raises:
+            Exception: If listing tag policies fails or workspace_client is None
+        """
+        if not self.workspace_client:
+            raise Exception(
+                "WorkspaceClient is required for tag policy operations"
+            )
+
+        try:
+            tag_policies = list(self.workspace_client.tag_policies.list_tag_policies())
+            return tag_policies
+        except Exception as e:
+            raise Exception(f"Failed to list tag policies: {str(e)}") from e
+
+    def get_tag_policy(self, tag_key: str) -> TagPolicy:
+        """
+        Get tag policy info using workspace client.
+
+        Args:
+            tag_key: Key of the tag policy to get
+
+        Returns:
+            TagPolicy containing tag policy information
+
+        Raises:
+            Exception: If getting tag policy fails or workspace_client is None
+        """
+        if not self.workspace_client:
+            raise Exception(
+                "WorkspaceClient is required for tag policy operations"
+            )
+
+        try:
+            tag_policy_info = self.workspace_client.tag_policies.get_tag_policy(tag_key)
+            return tag_policy_info
+        except Exception as e:
+            raise Exception(
+                f"Failed to get tag policy {tag_key}: {str(e)}"
+            ) from e
+
+    @staticmethod
+    def _build_tag_policy(tag_policy_config: dict) -> TagPolicy:
+        """Build a TagPolicy SDK object from a plain dict."""
+        raw_values = tag_policy_config.get("values")
+        values: Optional[List[Value]] = None
+        if raw_values is not None:
+            values = [
+                v if isinstance(v, Value) else Value(name=v["name"])
+                for v in raw_values
+            ]
+        return TagPolicy(
+            tag_key=tag_policy_config["tag_key"],
+            description=tag_policy_config.get("description"),
+            values=values,
+        )
+
+    def create_tag_policy(self, tag_policy_config: dict) -> TagPolicy:
+        """
+        Create tag policy using workspace client.
+
+        Args:
+            tag_policy_config: Dictionary containing tag policy creation parameters
+                (tag_key, description, values)
+
+        Returns:
+            TagPolicy containing created tag policy information
+
+        Raises:
+            Exception: If tag policy creation fails or workspace_client is None
+        """
+        if not self.workspace_client:
+            raise Exception(
+                "WorkspaceClient is required for tag policy operations"
+            )
+
+        try:
+            tag_policy = self._build_tag_policy(tag_policy_config)
+            created_tag_policy = self.workspace_client.tag_policies.create_tag_policy(
+                tag_policy=tag_policy
+            )
+            return created_tag_policy
+        except Exception as e:
+            raise Exception(f"Failed to create tag policy: {str(e)}") from e
+
+    def update_tag_policy(
+        self, tag_policy_config: dict, update_mask: str = "description,values"
+    ) -> TagPolicy:
+        """
+        Update tag policy using workspace client.
+
+        Args:
+            tag_policy_config: Dictionary containing tag policy update parameters
+                (tag_key, description, values)
+            update_mask: Comma-separated field mask controlling which fields to update
+
+        Returns:
+            TagPolicy containing updated tag policy information
+
+        Raises:
+            Exception: If tag policy update fails or workspace_client is None
+        """
+        if not self.workspace_client:
+            raise Exception(
+                "WorkspaceClient is required for tag policy operations"
+            )
+
+        try:
+            tag_policy = self._build_tag_policy(tag_policy_config)
+            updated_tag_policy = self.workspace_client.tag_policies.update_tag_policy(
+                tag_key=tag_policy_config["tag_key"],
+                tag_policy=tag_policy,
+                update_mask=update_mask,
+            )
+            return updated_tag_policy
+        except Exception as e:
+            raise Exception(f"Failed to update tag policy: {str(e)}") from e
 
     def show_create_table_ddl(self, table_name: str) -> str:
         """
