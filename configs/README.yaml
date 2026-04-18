@@ -38,6 +38,17 @@ storage_credential_config:
 cloud_url_mapping:
   "abfss://test@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/test/"
 
+# Optional: Principal mapping between source and target. Used only for grant
+# replication. Keys and values are principal strings as returned by the UC
+# grants API: user email, group display name, or service principal
+# application id (UUID) for cloud-provider SPs. Unmapped principals pass
+# through verbatim (useful for groups/users that exist with the same name on
+# both sides).
+principal_mapping:
+  "alice@src.example.com": "alice@tgt.example.com"
+  "source-group": "target-group"
+  "11111111-1111-1111-1111-111111111111": "22222222-2222-2222-2222-222222222222"
+
 # Optional: External location configuration
 external_location_config:
   # Optional: external location to replicate. if not provided, all external locations matched in cloud_url_mapping will be replicated.
@@ -65,19 +76,22 @@ uc_object_types: [
     "tag_policy",
     "catalog",
     "catalog_tag",
+    "catalog_grant",
     "schema",
     "schema_tag",
+    "schema_grant",
     "table",
     "view",
     "table_comment",
     "table_tag",
+    "table_grant",
     "volume",
     "volume_tag",
+    "volume_grant",
     "column_tag",
     "column_comment",
     "materialized_view",
     "streaming_table",
-    # "permission"
   ]
 
 # Optional: replication group level table types for data replication or reconciliation

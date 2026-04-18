@@ -27,7 +27,7 @@ This system provides incremental data and UC metadata replication capabilities b
 | SQL-based Streaming Tables | Supported | DLT-based ST should be recreated by DLT in target
 | Tags (catalog, schema, table, columns, views, volume) | Supported |
 | Column Comments | Supported |
-| Permissions | In Development |
+| Grants (catalog, schema, table/view/MV/ST, volume) | Supported | Principal-scoped sync; source principals optionally remapped via `principal_mapping`. Ownership not replicated. |
 | Functions | In Development |
 | Models | In Development |
 
@@ -172,7 +172,7 @@ data-replicator configs/cross_metastore/volume_defaults.yaml --validate-only
 # Replicate all uc metadata
 # Set storage_credential_config if storage credentials need to be replicated
 # Set cloud_url_mapping if external location or external table need to be replicated
-# Objects will be replicated in the following logical order: Storage credentials -> External locations -> Tag policies -> Catalogs -> Schemas -> Tables -> Views -> Volumes -> Column Tags -> Column Comments -> Permissions
+# Objects will be replicated in the following logical order: Storage credentials -> External locations -> Tag policies -> Catalogs (+ tags, grants) -> Schemas (+ tags, grants) -> Tables -> Views -> Volumes -> Table/Volume Tags -> Table/Volume Grants -> Column Tags -> Column Comments
 data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --uc-object-types all --target-catalogs catalog1,catalog2,catalog3
 
 # Replicate delta tables for specific catalogs

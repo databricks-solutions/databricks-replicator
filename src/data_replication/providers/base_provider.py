@@ -16,7 +16,10 @@ import random
 
 from databricks.connect import DatabricksSession
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.catalog import EnablePredictiveOptimization
+from databricks.sdk.service.catalog import (
+    EnablePredictiveOptimization,
+    PermissionsChange,
+)
 
 from pyspark.sql.utils import AnalysisException
 
@@ -75,6 +78,7 @@ class BaseProvider(ABC):
         cloud_url_mapping: Optional[dict] = None,
         audit_logger: Optional[AuditLogger] = None,
         completed_run_results: Optional[List[RunResult]] = None,
+        principal_mapping: Optional[dict] = None,
     ):
         """
         Initialize the base provider.
@@ -99,6 +103,7 @@ class BaseProvider(ABC):
         self.max_workers = self.catalog_config.concurrency.max_workers
         self.timeout_seconds = self.catalog_config.concurrency.timeout_seconds
         self.cloud_url_mapping = cloud_url_mapping
+        self.principal_mapping = principal_mapping
         self.audit_logger = audit_logger
         self.catalog_name: Optional[str] = None
         self.source_spark = None
@@ -292,6 +297,22 @@ class BaseProvider(ABC):
                 if len(uc_object_types_catalog_processed) == 0:
                     return results
 
+            # Replicate catalog grants if configured
+            if self.catalog_config.uc_object_types and (
+                UCObjectType.CATALOG_GRANT in self.catalog_config.uc_object_types
+                or UCObjectType.ALL in self.catalog_config.uc_object_types
+            ):
+                run_result = self._uc_replicate_catalog_grants()
+                results.extend(run_result)
+                catalog_run_result = []
+                if run_result:
+                    catalog_run_result.extend(run_result)
+                    self.audit_logger.log_results(catalog_run_result)
+                if UCObjectType.ALL not in self.catalog_config.uc_object_types:
+                    uc_object_types_catalog_processed.remove(UCObjectType.CATALOG_GRANT)
+                if len(uc_object_types_catalog_processed) == 0:
+                    return results
+
             # Handle schema-table filter expression if configured or sampling is enabled
             if self.catalog_config.schema_table_filter_expression or (
                 self.catalog_config.reconciliation_config
@@ -429,6 +450,22 @@ class BaseProvider(ABC):
                     if UCObjectType.ALL not in self.catalog_config.uc_object_types:
                         uc_object_types_schema_processed.remove(UCObjectType.SCHEMA_TAG)
                     # continue to next schema if no other object types to process
+                    if len(uc_object_types_schema_processed) == 0:
+                        continue
+
+                # Replicate schema grants if configured
+                if self.catalog_config.uc_object_types and (
+                    UCObjectType.SCHEMA_GRANT in self.catalog_config.uc_object_types
+                    or UCObjectType.ALL in self.catalog_config.uc_object_types
+                ):
+                    run_result = self._uc_replicate_schema_grants(schema_config)
+                    results.extend(run_result)
+                    schema_run_result = []
+                    if run_result:
+                        schema_run_result.extend(run_result)
+                        self.audit_logger.log_results(schema_run_result)
+                    if UCObjectType.ALL not in self.catalog_config.uc_object_types:
+                        uc_object_types_schema_processed.remove(UCObjectType.SCHEMA_GRANT)
                     if len(uc_object_types_schema_processed) == 0:
                         continue
 
@@ -1779,6 +1816,290 @@ class BaseProvider(ABC):
 
         run_results.append(run_result)
         return run_results
+
+    def _map_principal(self, principal: Optional[str]) -> Optional[str]:
+        """Apply system-level principal_mapping; verbatim if unmapped or None."""
+        if principal is None:
+            return None
+        if not self.principal_mapping:
+            return principal
+        return self.principal_mapping.get(principal, principal)
+
+    def _diff_privileges_per_principal(
+        self,
+        source_assignments: List,
+        target_assignments: List,
+    ) -> List[PermissionsChange]:
+        """
+        Build per-principal add/remove PermissionsChange entries from source
+        and target PrivilegeAssignment lists, under principal-scoped overwrite:
+
+          - for each source principal, the target's privileges for that
+            principal become exactly source's — add missing, remove extras
+          - target-only principals are left alone
+
+        Source principals are passed through principal_mapping first.
+        """
+        # source_by_principal maps mapped-principal -> set(privilege values)
+        source_by_principal: dict = {}
+        for pa in source_assignments or []:
+            mapped = self._map_principal(getattr(pa, "principal", None))
+            if not mapped:
+                continue
+            privs = {
+                getattr(p, "value", p) for p in (getattr(pa, "privileges", None) or [])
+            }
+            source_by_principal.setdefault(mapped, set()).update(privs)
+
+        target_by_principal: dict = {}
+        for pa in target_assignments or []:
+            principal = getattr(pa, "principal", None)
+            if not principal:
+                continue
+            privs = {
+                getattr(p, "value", p) for p in (getattr(pa, "privileges", None) or [])
+            }
+            target_by_principal.setdefault(principal, set()).update(privs)
+
+        changes: List[PermissionsChange] = []
+        for principal, source_privs in source_by_principal.items():
+            target_privs = target_by_principal.get(principal, set())
+            to_add = source_privs - target_privs
+            to_remove = target_privs - source_privs
+            if not to_add and not to_remove:
+                continue
+            changes.append(
+                PermissionsChange(
+                    principal=principal,
+                    add=sorted(to_add) or None,
+                    remove=sorted(to_remove) or None,
+                )
+            )
+        return changes
+
+    def _replicate_grants(
+        self,
+        object_type: str,
+        securable_type: str,
+        source_full_name: str,
+        target_full_name: str,
+        target_catalog: str,
+        schema_name: Optional[str] = None,
+        object_name: Optional[str] = None,
+        retry: Optional[RetryConfig] = None,
+    ) -> RunResult:
+        """
+        Replicate principal-scoped grants from a source securable to a target
+        securable. Target principals not present on source are left alone.
+        Source principals are remapped via system.principal_mapping.
+        """
+        start_time = datetime.now(timezone.utc)
+        attempt = 1
+        max_attempts = retry.max_attempts if retry else 1
+        last_exception: Optional[Exception] = None
+
+        try:
+            self.logger.info(
+                f"Starting {object_type} replication: {source_full_name} -> {target_full_name}",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
+
+            source_assignments = self.source_dbops.get_grants(
+                securable_type, source_full_name
+            )
+            target_assignments = self.target_dbops.get_grants(
+                securable_type, target_full_name
+            )
+
+            changes = self._diff_privileges_per_principal(
+                source_assignments, target_assignments
+            )
+
+            end_time = datetime.now(timezone.utc)
+            if not changes:
+                self.logger.info(
+                    f"No grant changes needed: {source_full_name} -> {target_full_name}",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                duration = (end_time - start_time).total_seconds()
+                return RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    object_name=object_name or target_catalog,
+                    object_type=object_type,
+                    status="success",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    details={
+                        "source_object": source_full_name,
+                        "target_object": target_full_name,
+                        "principals_synced": 0,
+                        "skipped": True,
+                    },
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+
+            # Apply changes with configured retry
+            @retry_with_logging(retry, self.logger)
+            def _apply():
+                self.target_dbops.update_grants(
+                    securable_type=securable_type,
+                    full_name=target_full_name,
+                    changes=changes,
+                )
+                return True
+
+            result, last_exception, attempt, max_attempts = _apply()
+            end_time = datetime.now(timezone.utc)
+            duration = (end_time - start_time).total_seconds()
+
+            if result:
+                self.logger.info(
+                    f"{object_type} replication completed: {source_full_name} -> {target_full_name} "
+                    f"({len(changes)} principals, {duration:.2f}s)",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                return RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    object_name=object_name or target_catalog,
+                    object_type=object_type,
+                    status="success",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    details={
+                        "source_object": source_full_name,
+                        "target_object": target_full_name,
+                        "principals_synced": len(changes),
+                    },
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+
+        except Exception as e:
+            last_exception = e
+
+        end_time = datetime.now(timezone.utc)
+        duration = (end_time - start_time).total_seconds()
+        error_msg = (
+            f"{object_type} replication failed: {source_full_name} -> {target_full_name}"
+        )
+        if last_exception:
+            error_msg += f" | Last error: {str(last_exception)}"
+        self.logger.error(
+            error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+        )
+        return RunResult(
+            operation_type="uc_replication",
+            catalog_name=target_catalog,
+            schema_name=schema_name,
+            object_name=object_name or target_catalog,
+            object_type=object_type,
+            status="failed",
+            start_time=start_time.isoformat(),
+            end_time=end_time.isoformat(),
+            duration_seconds=duration,
+            error_message=str(last_exception) if last_exception else "Unknown error",
+            details={
+                "source_object": source_full_name,
+                "target_object": target_full_name,
+            },
+            attempt_number=attempt,
+            max_attempts=max_attempts,
+        )
+
+    def _uc_replicate_catalog_grants(self) -> List[RunResult]:
+        """Replicate catalog-level grants."""
+        replication_config = self.catalog_config.replication_config
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+
+        if not self.source_dbops.if_catalog_exists(
+            source_catalog
+        ) or not self.target_dbops.if_catalog_exists(target_catalog):
+            self.logger.warning(
+                f"Source or target catalog {target_catalog} does not exist. Skipping catalog grant replication."
+            )
+            return [
+                RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name="",
+                    object_name=target_catalog,
+                    object_type="catalog_grant",
+                    status="failed",
+                    start_time=datetime.now(timezone.utc).isoformat(),
+                    end_time=datetime.now(timezone.utc).isoformat(),
+                    duration_seconds=0.0,
+                    error_message=f"Source or target catalog {target_catalog} does not exist.",
+                    details={},
+                    attempt_number=1,
+                    max_attempts=self.catalog_config.retry.max_attempts,
+                )
+            ]
+
+        return [
+            self._replicate_grants(
+                object_type="catalog_grant",
+                securable_type="CATALOG",
+                source_full_name=source_catalog,
+                target_full_name=target_catalog,
+                target_catalog=target_catalog,
+                object_name=target_catalog,
+                retry=self.catalog_config.retry,
+            )
+        ]
+
+    def _uc_replicate_schema_grants(
+        self, schema_config: SchemaConfig
+    ) -> List[RunResult]:
+        """Replicate schema-level grants."""
+        replication_config = schema_config.replication_config
+        schema_name = schema_config.schema_name
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+
+        if not self.source_dbops.if_schema_exists(
+            source_catalog, schema_name
+        ) or not self.target_dbops.if_schema_exists(target_catalog, schema_name):
+            self.logger.warning(
+                f"Source or target schema {target_catalog}.{schema_name} does not exist. Skipping schema grant replication."
+            )
+            return [
+                RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    object_name=schema_name,
+                    object_type="schema_grant",
+                    status="failed",
+                    start_time=datetime.now(timezone.utc).isoformat(),
+                    end_time=datetime.now(timezone.utc).isoformat(),
+                    duration_seconds=0.0,
+                    error_message=f"Source or target schema {target_catalog}.{schema_name} does not exist.",
+                    details={},
+                    attempt_number=1,
+                    max_attempts=schema_config.retry.max_attempts,
+                )
+            ]
+
+        return [
+            self._replicate_grants(
+                object_type="schema_grant",
+                securable_type="SCHEMA",
+                source_full_name=f"{source_catalog}.{schema_name}",
+                target_full_name=f"{target_catalog}.{schema_name}",
+                target_catalog=target_catalog,
+                schema_name=schema_name,
+                object_name=schema_name,
+                retry=schema_config.retry,
+            )
+        ]
 
     def _uc_replicate_catalog(self) -> List[RunResult]:
         """

@@ -89,6 +89,10 @@ class UCObjectType(str, Enum):
     STORAGE_CREDENTIAL = "storage_credential"
     EXTERNAL_LOCATION = "external_location"
     TAG_POLICY = "tag_policy"
+    CATALOG_GRANT = "catalog_grant"
+    SCHEMA_GRANT = "schema_grant"
+    TABLE_GRANT = "table_grant"
+    VOLUME_GRANT = "volume_grant"
     MATERIALIZED_VIEW = "materialized_view"
     STREAMING_TABLE = "streaming_table"
     ALL = "all"
@@ -489,6 +493,7 @@ class EnvironmentConfig(BaseModel):
     target_databricks_connect_config: DatabricksConnectConfig
     audit_config: AuditConfig = None
     cloud_url_mapping: Optional[dict] = None
+    principal_mapping: Optional[dict] = None
     storage_credential_config: Optional[StorageCredentialConfig] = None
     external_location_config: Optional[ExternalLocationConfig] = None
     tag_policy_config: Optional[TagPolicyConfig] = None
@@ -578,6 +583,10 @@ class ReplicationSystemConfig(BaseModel):
     target_databricks_connect_config: DatabricksConnectConfig
     audit_config: AuditConfig
     cloud_url_mapping: Optional[dict] = None
+    principal_mapping: Optional[dict] = Field(
+        default=None,
+        description="Mapping of source principals (user email, group name, or service principal application id) to target principals. Used only for grant replication. Unmapped principals pass through verbatim.",
+    )
     storage_credential_config: Optional[StorageCredentialConfig] = None
     external_location_config: Optional[ExternalLocationConfig] = None
     tag_policy_config: Optional[TagPolicyConfig] = None
