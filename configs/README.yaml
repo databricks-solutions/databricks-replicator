@@ -16,13 +16,23 @@ audit_config:
 
 # Mandatory if storage credential are replicated
 storage_credential_config:
-  # Mandatory if storage credential are replicated. Accepted values: aws, azure_access_connector, azure_managed_identity
+  # Mandatory if storage credential are replicated. Accepted values: aws, azure_access_connector, azure_managed_identity, gcp_service_account
   target_credential_type: "aws"
   # Mandatory if storage credential are replicated. mapping between source storage credential name and cloud principal id on target.
-  # for aws, cloud principal id is iam role arn. for azure, it is azure managed identity.
+  # for aws, cloud principal id is iam role arn. for azure, it is azure managed identity access connector id.
+  # for gcp_service_account, the principal id is ignored (Databricks auto-provisions the GCS service account); any placeholder value is accepted.
+  # NOTE for gcp_service_account: create is performed with skip_validation=true, because the auto-provisioned
+  # service account has no GCS access until you grant it on each target bucket. The replicator logs a WARNING
+  # after create containing the SA email and the exact `gcloud storage buckets add-iam-policy-binding` command
+  # to run. Until that binding exists, external locations built on the credential will fail to validate.
   mapping:
-    "source_storage_credential_1": "iam_role_arn_1"
-    "source_storage_credential_2": "iam_role_arn_2"
+    # For aws, the value is the target iam role arn:
+    "source_storage_credential_1": "arn:aws:iam::123456789012:role/target-role-1"
+    "source_storage_credential_2": "arn:aws:iam::123456789012:role/target-role-2"
+    # For azure_access_connector / azure_managed_identity, the value is the target access connector resource id:
+    "source_storage_credential_azure": "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Databricks/accessConnectors/<name>"
+    # For gcp_service_account, the value is ignored — any placeholder works:
+    "source_storage_credential_gcp": "unused"
 
 # Mandatory if exterrnal location, catalog, schema, tables or volumes with locations are replicated. cloud storage mapping between source and target cloud
 cloud_url_mapping:
