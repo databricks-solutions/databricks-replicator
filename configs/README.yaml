@@ -45,6 +45,13 @@ external_location_config:
     - external_location_1
     - external_location_2
 
+# Optional: Tag policy configuration
+tag_policy_config:
+  # Optional: tag policy keys to replicate. if not provided, all tag policies on source will be replicated.
+  tag_policies:
+    - cost_center
+    - environment
+
 # Mandatory: Only one of uc_object_types, table_types, volume_types must be provided
 # when uc_object_types is provided, uc metadata will be replicated.
 # when table_types is provided, data in tables of specified types will be replicated.
@@ -55,6 +62,7 @@ uc_object_types: [
     "all",
     "storage_credential",
     "external_location",
+    "tag_policy",
     "catalog",
     "catalog_tag",
     "schema",

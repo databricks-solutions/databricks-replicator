@@ -32,6 +32,8 @@ from ..constants import (
     DICT_FOR_UPDATE_STORAGE_CREDENTIAL,
     DICT_FOR_CREATION_EXTERNAL_LOCATION,
     DICT_FOR_UPDATE_EXTERNAL_LOCATION,
+    DICT_FOR_CREATION_TAG_POLICY,
+    DICT_FOR_UPDATE_TAG_POLICY,
 )
 from ..databricks_operations import DatabricksOperations
 from ..utils import (
@@ -113,12 +115,14 @@ class ProviderFactory:
                 config_details=config_dict,
             )
 
-        # Create source and target workspace client for storage credential and external location replication
+        # Create source and target workspace client for metastore-level replication
+        # (storage credential, external location, tag policy).
         if self._operation_type == "replication" and (
             self.config.uc_object_types
             and (
                 UCObjectType.STORAGE_CREDENTIAL in self.config.uc_object_types
                 or UCObjectType.EXTERNAL_LOCATION in self.config.uc_object_types
+                or UCObjectType.TAG_POLICY in self.config.uc_object_types
                 or UCObjectType.ALL in self.config.uc_object_types
             )
         ):
@@ -423,6 +427,31 @@ class ProviderFactory:
                     self.audit_logger.log_results(external_location_results)
                 if UCObjectType.ALL not in self.config.uc_object_types:
                     self.config.uc_object_types.remove(UCObjectType.EXTERNAL_LOCATION)
+                # immediately return if no other object types to process
+                if len(self.config.uc_object_types) == 0:
+                    summary = self.create_summary(
+                        start_time, self.completed_run_results, operation_name
+                    )
+                    # Log final summary
+                    self.log_run_summary(summary, operation_name)
+                    return summary
+
+            # Check if tag policy replication is needed (only for replication operations)
+            # Only check system-level uc_object_types
+            if (
+                self._operation_type == "replication"
+                and self.config.uc_object_types
+                and (
+                    UCObjectType.TAG_POLICY in self.config.uc_object_types
+                    or UCObjectType.ALL in self.config.uc_object_types
+                )
+            ):
+                tag_policy_results = self._replicate_tag_policies()
+                self.completed_run_results.extend(tag_policy_results)
+                if tag_policy_results:
+                    self.audit_logger.log_results(tag_policy_results)
+                if UCObjectType.ALL not in self.config.uc_object_types:
+                    self.config.uc_object_types.remove(UCObjectType.TAG_POLICY)
                 # immediately return if no other object types to process
                 if len(self.config.uc_object_types) == 0:
                     summary = self.create_summary(
@@ -958,6 +987,193 @@ class ProviderFactory:
                     schema_name=None,
                     object_name=None,
                     object_type="external_location",
+                    status="failed",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    error_message=error_msg,
+                )
+            )
+        return results
+
+    def _replicate_tag_policies(self) -> List[RunResult]:
+        """
+        Replicate tag policies before catalog operations.
+
+        Follows the same shape as _replicate_external_locations: discover the
+        set of tag policies to copy, then for each one, build create/update
+        dicts from the source TagPolicy, create on target if missing, or
+        update only when the update dict differs from the target.
+
+        Returns:
+            List of RunResult objects for tag policy operations
+        """
+        results = []
+        start_time = datetime.now(timezone.utc)
+        end_time = start_time
+        last_exception = None
+
+        try:
+            # Determine which tag policies to replicate: explicit list, or all on source.
+            if (
+                self.config.tag_policy_config
+                and self.config.tag_policy_config.tag_policies
+            ):
+                tag_policies_to_replicate = (
+                    self.config.tag_policy_config.tag_policies
+                )
+                self.logger.info(
+                    f"Replicating {len(tag_policies_to_replicate)} configured tag policies"
+                )
+            else:
+                all_source_tag_policies = self.source_db_ops.list_tag_policies()
+                tag_policies_to_replicate = [
+                    getattr(tp, "tag_key", None)
+                    for tp in all_source_tag_policies
+                    if getattr(tp, "tag_key", None)
+                ]
+                self.logger.info(
+                    f"Found {len(tag_policies_to_replicate)} tag policies on source"
+                )
+
+            for source_tag_key in tag_policies_to_replicate:
+                start_time = datetime.now(timezone.utc)
+
+                try:
+                    target_tag_key = source_tag_key  # Use same key on target
+
+                    self.logger.info(
+                        f"Starting tag policy replication: {source_tag_key} -> {target_tag_key}"
+                    )
+
+                    source_tag_policy_info = self.source_db_ops.get_tag_policy(
+                        source_tag_key
+                    )
+
+                    # Build creation dict from source tag policy
+                    dict_for_creation = {
+                        k: getattr(source_tag_policy_info, k, None)
+                        for k, v in source_tag_policy_info.as_dict().items()
+                        if k in DICT_FOR_CREATION_TAG_POLICY.keys()
+                    }
+
+                    # Build update dict from source tag policy
+                    dict_for_update = {
+                        k: getattr(source_tag_policy_info, k, None)
+                        for k, v in source_tag_policy_info.as_dict().items()
+                        if k in DICT_FOR_UPDATE_TAG_POLICY.keys()
+                    }
+
+                    dict_for_creation["tag_key"] = target_tag_key
+                    dict_for_update["tag_key"] = target_tag_key
+
+                    # Check if target tag policy already exists
+                    policy_exists = False
+                    target_tag_policy_info = None
+                    try:
+                        target_tag_policy_info = self.target_db_ops.get_tag_policy(
+                            target_tag_key
+                        )
+                        policy_exists = True
+                        self.logger.info(
+                            f"Target tag policy {target_tag_key} already exists, will update properties"
+                        )
+                    except Exception:
+                        # Policy doesn't exist, we'll create it
+                        pass
+
+                    if not policy_exists:
+                        _ = self.target_db_ops.create_tag_policy(dict_for_creation)
+                        self.logger.info(
+                            f"Created tag policy {target_tag_key}"
+                        )
+                    else:
+                        dict_for_update_target = {
+                            k: getattr(target_tag_policy_info, k, None)
+                            for k, v in target_tag_policy_info.as_dict().items()
+                            if k in DICT_FOR_UPDATE_TAG_POLICY.keys()
+                        }
+
+                        if dict_for_update != dict_for_update_target:
+                            _ = self.target_db_ops.update_tag_policy(dict_for_update)
+                            self.logger.info(
+                                f"Updated tag policy {target_tag_key}"
+                            )
+                        else:
+                            self.logger.info(
+                                f"Tag policy {target_tag_key} already up to date"
+                            )
+
+                    end_time = datetime.now(timezone.utc)
+                    duration = (end_time - start_time).total_seconds()
+
+                    self.logger.info(
+                        f"Tag policy replication completed successfully: {source_tag_key} -> {target_tag_key} ({duration:.2f}s)"
+                    )
+
+                    results.append(
+                        RunResult(
+                            operation_type="uc_replication",
+                            catalog_name=None,
+                            schema_name=None,
+                            object_name=target_tag_key,
+                            object_type="tag_policy",
+                            status="success",
+                            start_time=start_time.isoformat(),
+                            end_time=end_time.isoformat(),
+                            duration_seconds=duration,
+                            details={
+                                "source_tag_key": source_tag_key,
+                                "target_tag_key": target_tag_key,
+                                "policy_existed": policy_exists,
+                            },
+                        )
+                    )
+
+                except Exception as e:
+                    end_time = datetime.now(timezone.utc)
+                    duration = (end_time - start_time).total_seconds()
+
+                    error_msg = f"Failed to replicate tag policy {source_tag_key}: {str(e)}"
+                    self.logger.error(error_msg)
+
+                    results.append(
+                        RunResult(
+                            operation_type="uc_replication",
+                            catalog_name=None,
+                            schema_name=None,
+                            object_name=source_tag_key,
+                            object_type="tag_policy",
+                            status="failed",
+                            start_time=start_time.isoformat(),
+                            end_time=end_time.isoformat(),
+                            duration_seconds=duration,
+                            error_message=error_msg,
+                            details={
+                                "source_tag_key": source_tag_key,
+                                "target_tag_key": source_tag_key,
+                            },
+                        )
+                    )
+
+        except Exception as e:
+            error_msg = f"Tag policy replication failed: {str(e)}"
+            duration = (end_time - start_time).total_seconds()
+            last_exception = e
+
+            self.logger.error(
+                error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+            )
+            if last_exception:
+                error_msg += f" | Last error: {str(last_exception)}"
+
+            results.append(
+                RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=None,
+                    schema_name=None,
+                    object_name=None,
+                    object_type="tag_policy",
                     status="failed",
                     start_time=start_time.isoformat(),
                     end_time=end_time.isoformat(),

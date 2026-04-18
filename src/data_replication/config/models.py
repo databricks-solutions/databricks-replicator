@@ -88,6 +88,7 @@ class UCObjectType(str, Enum):
     COLUMN_COMMENT = "column_comment"
     STORAGE_CREDENTIAL = "storage_credential"
     EXTERNAL_LOCATION = "external_location"
+    TAG_POLICY = "tag_policy"
     MATERIALIZED_VIEW = "materialized_view"
     STREAMING_TABLE = "streaming_table"
     ALL = "all"
@@ -468,6 +469,16 @@ class ExternalLocationConfig(BaseModel):
     )
 
 
+class TagPolicyConfig(BaseModel):
+    """Configuration for tag policy replication."""
+
+    model_config = ConfigDict(extra="forbid")
+    tag_policies: Optional[List[str]] = Field(
+        default=None,
+        description="List of tag policy keys to replicate. If not provided, all tag policies on the source will be replicated",
+    )
+
+
 class EnvironmentConfig(BaseModel):
     """Configuration for a single environment."""
 
@@ -480,6 +491,7 @@ class EnvironmentConfig(BaseModel):
     cloud_url_mapping: Optional[dict] = None
     storage_credential_config: Optional[StorageCredentialConfig] = None
     external_location_config: Optional[ExternalLocationConfig] = None
+    tag_policy_config: Optional[TagPolicyConfig] = None
     table_types: Optional[List[TableType]] = None
     volume_types: Optional[List[VolumeType]] = None
     uc_object_types: Optional[List[UCObjectType]] = None
@@ -568,6 +580,7 @@ class ReplicationSystemConfig(BaseModel):
     cloud_url_mapping: Optional[dict] = None
     storage_credential_config: Optional[StorageCredentialConfig] = None
     external_location_config: Optional[ExternalLocationConfig] = None
+    tag_policy_config: Optional[TagPolicyConfig] = None
     table_types: Optional[List[TableType]] = None
     volume_types: Optional[List[VolumeType]] = None
     uc_object_types: Optional[List[UCObjectType]] = None
@@ -596,6 +609,7 @@ class ReplicationSystemConfig(BaseModel):
                 metastore_only_types = {
                     UCObjectType.STORAGE_CREDENTIAL,
                     UCObjectType.EXTERNAL_LOCATION,
+                    UCObjectType.TAG_POLICY,
                 }
                 # Check if all configured types are metastore-level
                 if all(obj_type in metastore_only_types for obj_type in uc_types):
@@ -603,8 +617,8 @@ class ReplicationSystemConfig(BaseModel):
 
             raise ValueError(
                 "At least one target catalog must be configured unless only "
-                "metastore-level objects (storage_credential, external_location) "
-                "are being replicated"
+                "metastore-level objects (storage_credential, external_location, "
+                "tag_policy) are being replicated"
             )
         return self
 

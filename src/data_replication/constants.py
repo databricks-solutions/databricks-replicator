@@ -53,6 +53,18 @@ DICT_FOR_UPDATE_STORAGE_CREDENTIAL = {
     "skip_validation": None,
 }
 
+DICT_FOR_CREATION_TAG_POLICY = {
+    "tag_key": None,
+    "description": None,
+    "values": None,
+}
+
+DICT_FOR_UPDATE_TAG_POLICY = {
+    "tag_key": None,
+    "description": None,
+    "values": None,
+}
+
 DICT_FOR_CREATION_EXTERNAL_LOCATION = {
     "name": None,
     "comment": None,
