@@ -9,7 +9,7 @@ dist/
 __pycache__/
 *.egg-info
 .venv/
-scratch/**
+scratch/
 !scratch/README.md
 .vscode/
 .mypy_cache/
@@ -23,3 +23,4 @@ scratch/**
 .claude/
 terraform*/
 .coverage
+tests/
