@@ -1829,14 +1829,22 @@ class BaseProvider(ABC):
         self,
         source_assignments: List,
         target_assignments: List,
+        overwrite_grants: bool = False,
     ) -> List[PermissionsChange]:
         """
         Build per-principal add/remove PermissionsChange entries from source
-        and target PrivilegeAssignment lists, under principal-scoped overwrite:
+        and target PrivilegeAssignment lists.
 
+        Default (overwrite_grants=False, principal-scoped overwrite):
           - for each source principal, the target's privileges for that
             principal become exactly source's — add missing, remove extras
           - target-only principals are left alone
+
+        Hard sync (overwrite_grants=True):
+          - same as above, AND
+          - any principal present on target but not on source (after
+            principal_mapping) gets a remove-all change so target becomes an
+            exact mirror
 
         Source principals are passed through principal_mapping first.
         """
@@ -1875,6 +1883,18 @@ class BaseProvider(ABC):
                     remove=sorted(to_remove) or None,
                 )
             )
+
+        if overwrite_grants:
+            for principal, target_privs in target_by_principal.items():
+                if principal in source_by_principal or not target_privs:
+                    continue
+                changes.append(
+                    PermissionsChange(
+                        principal=principal,
+                        add=None,
+                        remove=sorted(target_privs),
+                    )
+                )
         return changes
 
     def _replicate_grants(
@@ -1887,6 +1907,7 @@ class BaseProvider(ABC):
         schema_name: Optional[str] = None,
         object_name: Optional[str] = None,
         retry: Optional[RetryConfig] = None,
+        overwrite_grants: bool = False,
     ) -> RunResult:
         """
         Replicate principal-scoped grants from a source securable to a target
@@ -1912,7 +1933,9 @@ class BaseProvider(ABC):
             )
 
             changes = self._diff_privileges_per_principal(
-                source_assignments, target_assignments
+                source_assignments,
+                target_assignments,
+                overwrite_grants=overwrite_grants,
             )
 
             end_time = datetime.now(timezone.utc)
@@ -1936,6 +1959,7 @@ class BaseProvider(ABC):
                         "source_object": source_full_name,
                         "target_object": target_full_name,
                         "principals_synced": 0,
+                        "overwrite_grants": overwrite_grants,
                         "skipped": True,
                     },
                     attempt_number=attempt,
@@ -1976,6 +2000,7 @@ class BaseProvider(ABC):
                         "source_object": source_full_name,
                         "target_object": target_full_name,
                         "principals_synced": len(changes),
+                        "overwrite_grants": overwrite_grants,
                     },
                     attempt_number=attempt,
                     max_attempts=max_attempts,
@@ -2052,6 +2077,9 @@ class BaseProvider(ABC):
                 target_catalog=target_catalog,
                 object_name=target_catalog,
                 retry=self.catalog_config.retry,
+                overwrite_grants=bool(
+                    getattr(replication_config, "overwrite_grants", False)
+                ),
             )
         ]
 
@@ -2098,6 +2126,9 @@ class BaseProvider(ABC):
                 schema_name=schema_name,
                 object_name=schema_name,
                 retry=schema_config.retry,
+                overwrite_grants=bool(
+                    getattr(replication_config, "overwrite_grants", False)
+                ),
             )
         ]
 

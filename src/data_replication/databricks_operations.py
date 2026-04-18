@@ -1569,7 +1569,8 @@ class DatabricksOperations:
         self, securable_type: str, full_name: str
     ) -> List[PrivilegeAssignment]:
         """
-        Get direct (non-inherited) grants on a UC securable.
+        Get all direct (non-inherited) grants on a UC securable, walking the
+        grants.get pagination token until exhausted.
 
         Args:
             securable_type: Value of SecurableType enum (e.g. "CATALOG",
@@ -1578,8 +1579,8 @@ class DatabricksOperations:
                 "cat.sch", "cat.sch.tbl").
 
         Returns:
-            List of PrivilegeAssignment; empty list if the securable has no
-            direct grants.
+            List of PrivilegeAssignment across all pages; empty list if the
+            securable has no direct grants.
 
         Raises:
             Exception: If getting grants fails or workspace_client is None.
@@ -1587,11 +1588,20 @@ class DatabricksOperations:
         if not self.workspace_client:
             raise Exception("WorkspaceClient is required for grant operations")
 
+        assignments: List[PrivilegeAssignment] = []
+        page_token: Optional[str] = None
         try:
-            response = self.workspace_client.grants.get(
-                securable_type=securable_type, full_name=full_name
-            )
-            return list(response.privilege_assignments or [])
+            while True:
+                response = self.workspace_client.grants.get(
+                    securable_type=securable_type,
+                    full_name=full_name,
+                    page_token=page_token,
+                )
+                assignments.extend(response.privilege_assignments or [])
+                page_token = getattr(response, "next_page_token", None)
+                if not page_token:
+                    break
+            return assignments
         except Exception as e:
             raise Exception(
                 f"Failed to get grants for {securable_type} {full_name}: {str(e)}"

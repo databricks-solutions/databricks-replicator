@@ -265,6 +265,7 @@ class ReplicationConfig(BaseModel):
     create_or_replace_streaming_table: Optional[bool] = False
     overwrite_tags: Optional[bool] = True
     overwrite_comments: Optional[bool] = True
+    overwrite_grants: Optional[bool] = False
     replicate_as_managed: Optional[bool] = False
     copy_files: Optional[bool] = True
     volume_config: Optional["VolumeFilesReplicationConfig"] = None

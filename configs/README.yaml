@@ -167,6 +167,11 @@ replication_config:
   overwrite_tags: true
   # Optional: whether to overwrite comments during replication. default is true.
   overwrite_comments: true
+  # Optional: grant replication mode. default is false (principal-scoped overwrite:
+  # sync each source principal's privileges onto target; target-only principals
+  # untouched). Set to true for hard sync: revoke all privileges from target-only
+  # principals so target becomes an exact mirror of source (after principal_mapping).
+  overwrite_grants: false
   # uc metadata specific configurations end here: ------------------------
 
   # Data Replication specific configurations start here: ------------------------

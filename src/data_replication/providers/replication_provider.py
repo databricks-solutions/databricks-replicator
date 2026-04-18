@@ -1638,6 +1638,9 @@ class ReplicationProvider(BaseProvider):
                     schema_name=schema_name,
                     object_name=table_name,
                     retry=table_config.retry,
+                    overwrite_grants=bool(
+                        getattr(replication_config, "overwrite_grants", False)
+                    ),
                 )
             ]
 
@@ -1699,6 +1702,9 @@ class ReplicationProvider(BaseProvider):
                     schema_name=schema_name,
                     object_name=volume_name,
                     retry=volume_config.retry,
+                    overwrite_grants=bool(
+                        getattr(replication_config, "overwrite_grants", False)
+                    ),
                 )
             ]
 
