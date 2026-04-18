@@ -39,15 +39,18 @@ cloud_url_mapping:
   "abfss://test@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/test/"
 
 # Optional: Principal mapping between source and target. Used only for grant
-# replication. Keys and values are principal strings as returned by the UC
-# grants API: user email, group display name, or service principal
-# application id (UUID) for cloud-provider SPs. Unmapped principals pass
-# through verbatim (useful for groups/users that exist with the same name on
-# both sides).
+# replication. Keys and values are principal strings: user email, group
+# display name, service principal application id (UUID), or service principal
+# display name. For SPs, both sides of the mapping can be display names — the
+# replicator looks up the source workspace for "source UUID -> display name"
+# and the target workspace for "display name -> target UUID" automatically.
+# Unmapped principals pass through verbatim (useful for groups/users that
+# exist with the same name on both sides).
 principal_mapping:
   "alice@src.example.com": "alice@tgt.example.com"
   "source-group": "target-group"
-  "11111111-1111-1111-1111-111111111111": "22222222-2222-2222-2222-222222222222"
+  "etl-prod-sp": "etl-stg-sp"                # SP display-name -> display-name
+  "11111111-1111-1111-1111-111111111111": "22222222-2222-2222-2222-222222222222"  # explicit UUID -> UUID
 
 # Optional: External location configuration
 external_location_config:

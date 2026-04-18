@@ -1565,6 +1565,30 @@ class DatabricksOperations:
         except Exception as e:
             raise Exception(f"Failed to update external location: {str(e)}") from e
 
+    def list_service_principal_name_map(self) -> dict:
+        """
+        Build a dict mapping application_id (UUID) -> display_name for every
+        service principal visible in this workspace. Used by grant replication
+        to let callers map SPs by display name rather than cloud-provider UUID.
+
+        Returns empty dict if the workspace_client has no service_principals
+        API access or if listing fails — callers should treat that as
+        "name-based SP mapping unavailable".
+        """
+        if not self.workspace_client:
+            return {}
+
+        name_map: dict = {}
+        try:
+            for sp in self.workspace_client.service_principals.list():
+                app_id = getattr(sp, "application_id", None)
+                display_name = getattr(sp, "display_name", None)
+                if app_id and display_name:
+                    name_map[app_id] = display_name
+            return name_map
+        except Exception:
+            return {}
+
     def get_grants(
         self, securable_type: str, full_name: str
     ) -> List[PrivilegeAssignment]:

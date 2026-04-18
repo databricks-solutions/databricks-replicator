@@ -1817,13 +1817,94 @@ class BaseProvider(ABC):
         run_results.append(run_result)
         return run_results
 
+    def _get_sp_name_caches(self) -> tuple:
+        """
+        Lazily build (source_uuid_to_name, target_name_to_uuid) caches so SPs
+        can be mapped by display name rather than application_id UUID.
+
+        Returns two empty dicts when either source/target DBOps is missing or
+        when the workspace doesn't expose service_principals listing; in that
+        case _map_principal quietly falls back to string-exact matching.
+        """
+        if getattr(self, "_sp_caches_built", False):
+            return self._sp_uuid_to_name_src, self._sp_name_to_uuid_tgt
+
+        src_uuid_to_name: dict = {}
+        tgt_uuid_to_name: dict = {}
+        try:
+            if self.source_dbops is not None:
+                src_uuid_to_name = self.source_dbops.list_service_principal_name_map()
+        except Exception:
+            src_uuid_to_name = {}
+        try:
+            if self.target_dbops is not None:
+                tgt_uuid_to_name = self.target_dbops.list_service_principal_name_map()
+        except Exception:
+            tgt_uuid_to_name = {}
+
+        # Build reverse lookup target_name -> target_uuid; warn on duplicate
+        # display names (first-seen wins) since the mapping is ambiguous.
+        tgt_name_to_uuid: dict = {}
+        duplicates: list = []
+        for uuid, name in tgt_uuid_to_name.items():
+            if name in tgt_name_to_uuid:
+                duplicates.append(name)
+                continue
+            tgt_name_to_uuid[name] = uuid
+        if duplicates and self.logger:
+            self.logger.warning(
+                "Target workspace has service principals sharing display names; "
+                "name-based SP mapping will use the first application_id seen. "
+                "Ambiguous names: %s",
+                sorted(set(duplicates)),
+            )
+
+        self._sp_uuid_to_name_src = src_uuid_to_name
+        self._sp_name_to_uuid_tgt = tgt_name_to_uuid
+        self._sp_caches_built = True
+        return src_uuid_to_name, tgt_name_to_uuid
+
     def _map_principal(self, principal: Optional[str]) -> Optional[str]:
-        """Apply system-level principal_mapping; verbatim if unmapped or None."""
+        """
+        Map a source principal string to a target principal string using the
+        system-level ``principal_mapping`` dict.
+
+        Lookup order:
+          1. Exact key match in principal_mapping (user email, group name, or
+             SP application_id UUID).
+          2. If the source principal is an SP UUID, resolve it to the source
+             SP display name via the source workspace and try the mapping
+             again using the display name. If the mapped value is itself a
+             display name, resolve it back to the target workspace's UUID.
+          3. Fall through verbatim.
+        """
         if principal is None:
             return None
-        if not self.principal_mapping:
-            return principal
-        return self.principal_mapping.get(principal, principal)
+        mapping = self.principal_mapping or {}
+
+        # Step 1: exact match wins — covers users/groups and explicit UUID->UUID
+        if principal in mapping:
+            mapped = mapping[principal]
+            # If the mapped value is a display name that resolves to a target
+            # UUID, translate it (so operators can write SP name -> SP name
+            # even when the target principal must ultimately be a UUID).
+            _, tgt_name_to_uuid = self._get_sp_name_caches()
+            if mapped in tgt_name_to_uuid:
+                return tgt_name_to_uuid[mapped]
+            return mapped
+
+        # Step 2: SP-by-name mapping — only meaningful if mapping is non-empty
+        if mapping:
+            src_uuid_to_name, tgt_name_to_uuid = self._get_sp_name_caches()
+            source_name = src_uuid_to_name.get(principal)
+            if source_name and source_name in mapping:
+                mapped = mapping[source_name]
+                if mapped in tgt_name_to_uuid:
+                    return tgt_name_to_uuid[mapped]
+                return mapped
+
+        # Step 3: verbatim fallthrough
+        return principal
 
     def _diff_privileges_per_principal(
         self,
@@ -1966,9 +2047,13 @@ class BaseProvider(ABC):
                     max_attempts=max_attempts,
                 )
 
-            # Apply changes with configured retry
+            # Apply changes with configured retry. On batch failure we fall
+            # back to per-principal apply so valid principals still land and
+            # only bad principals (missing / mistyped / wrong cloud UUID) are
+            # reported, instead of one bad principal rejecting the whole
+            # object's grant sync.
             @retry_with_logging(retry, self.logger)
-            def _apply():
+            def _apply_batch():
                 self.target_dbops.update_grants(
                     securable_type=securable_type,
                     full_name=target_full_name,
@@ -1976,14 +2061,51 @@ class BaseProvider(ABC):
                 )
                 return True
 
-            result, last_exception, attempt, max_attempts = _apply()
+            batch_ok, batch_exc, attempt, max_attempts = _apply_batch()
+            per_principal_failures: list = []
+
+            if not batch_ok:
+                self.logger.warning(
+                    "Batch grant apply failed for %s (%s); retrying per principal",
+                    target_full_name,
+                    str(batch_exc) if batch_exc else "unknown",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                for change in changes:
+                    try:
+                        self.target_dbops.update_grants(
+                            securable_type=securable_type,
+                            full_name=target_full_name,
+                            changes=[change],
+                        )
+                    except Exception as pe:
+                        per_principal_failures.append(
+                            {
+                                "principal": getattr(change, "principal", None),
+                                "error": str(pe),
+                            }
+                        )
+                        self.logger.warning(
+                            "Per-principal grant apply failed for %s on %s: %s",
+                            getattr(change, "principal", None),
+                            target_full_name,
+                            str(pe),
+                            extra={"run_id": self.run_id, "operation": "uc_replication"},
+                        )
+
             end_time = datetime.now(timezone.utc)
             duration = (end_time - start_time).total_seconds()
 
-            if result:
+            total = len(changes)
+            failed_count = len(per_principal_failures)
+            applied = total - failed_count
+            fully_ok = batch_ok or failed_count == 0
+            partially_ok = (not batch_ok) and failed_count > 0 and applied > 0
+
+            if fully_ok:
                 self.logger.info(
                     f"{object_type} replication completed: {source_full_name} -> {target_full_name} "
-                    f"({len(changes)} principals, {duration:.2f}s)",
+                    f"({total} principals, {duration:.2f}s)",
                     extra={"run_id": self.run_id, "operation": "uc_replication"},
                 )
                 return RunResult(
@@ -1999,12 +2121,45 @@ class BaseProvider(ABC):
                     details={
                         "source_object": source_full_name,
                         "target_object": target_full_name,
-                        "principals_synced": len(changes),
+                        "principals_synced": total,
                         "overwrite_grants": overwrite_grants,
                     },
                     attempt_number=attempt,
                     max_attempts=max_attempts,
                 )
+
+            # Partial: some principals applied, some failed — record both.
+            if partially_ok:
+                self.logger.warning(
+                    f"{object_type} partial: {source_full_name} -> {target_full_name} "
+                    f"({applied}/{total} principals applied, {failed_count} failed)",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                return RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    object_name=object_name or target_catalog,
+                    object_type=object_type,
+                    status="success",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    details={
+                        "source_object": source_full_name,
+                        "target_object": target_full_name,
+                        "principals_synced": applied,
+                        "principals_failed": failed_count,
+                        "failed_principals": per_principal_failures,
+                        "overwrite_grants": overwrite_grants,
+                    },
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+
+            # All principals failed in per-principal retry — fall through to
+            # the failed path below with the batch exception.
+            last_exception = batch_exc
 
         except Exception as e:
             last_exception = e
