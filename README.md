@@ -14,8 +14,9 @@ This system provides incremental data and UC metadata replication capabilities b
 
 | Object Type | Status | Comments|
 |-------------|--------|------------|
-| Storage Credentials | Supported |
+| Storage Credentials | Supported | aws, azure_access_connector, azure_managed_identity, gcp_service_account |
 | External Locations | Supported |
+| Tag Policies | Supported | Governed tag policies; replicate all from source or scope by list of tag keys |
 | Catalogs | Supported |
 | Schemas | Supported |
 | Volumes | Supported |
@@ -29,7 +30,6 @@ This system provides incremental data and UC metadata replication capabilities b
 | Permissions | In Development |
 | Functions | In Development |
 | Models | In Development |
-| Governed Tag | In Development |
 
 ### Data Replication
 
@@ -172,7 +172,7 @@ data-replicator configs/cross_metastore/volume_defaults.yaml --validate-only
 # Replicate all uc metadata
 # Set storage_credential_config if storage credentials need to be replicated
 # Set cloud_url_mapping if external location or external table need to be replicated
-# Objects will be replicated in the following logical order: Storage credentials -> External locations -> Catalogs -> Schemas -> Tables -> Views -> Volumes -> Column Tags -> Column Comments -> Permissions
+# Objects will be replicated in the following logical order: Storage credentials -> External locations -> Tag policies -> Catalogs -> Schemas -> Tables -> Views -> Volumes -> Column Tags -> Column Comments -> Permissions
 data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --uc-object-types all --target-catalogs catalog1,catalog2,catalog3
 
 # Replicate delta tables for specific catalogs
@@ -184,10 +184,10 @@ data-replicator configs/cross_metastore/volume_defaults.yaml --target-catalogs c
 ```
 The solution can be flexibly configured to replicate all or selected objects and data. Some objects such as storage credentials might be created centrally with Terraform instead
 ```bash
-# Replicate Storage credentials and External locations
-# Cloud identities setup (AWS role or Azure Managed Identity) with required access to cloud storage
+# Replicate Storage credentials, External locations and Tag policies
+# Cloud identities setup (AWS role, Azure Managed Identity, or GCP Databricks-managed service account) with required access to cloud storage
 # Configure uc_metadata_defaults.yaml
-data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --uc-object-types storage_credential,external_location
+data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --uc-object-types storage_credential,external_location,tag_policy
 
 # Replicate catalogs and schemas
 data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --uc-object-types catalog,schema --target-catalogs catalog1,catalog2,catalog3 
