@@ -309,7 +309,9 @@ def merge_models_recursive(
     if base_model is None and update_model is None:
         return None
 
-    model_type = type(update_model)
+    # Derive model_type from whichever model is non-None; using type(update_model)
+    # unconditionally would be NoneType when update_model is None.
+    model_type = type(update_model) if update_model is not None else type(base_model)
     if base_model is None:
         return model_type(**update_model.model_dump())
     if update_model is None:
