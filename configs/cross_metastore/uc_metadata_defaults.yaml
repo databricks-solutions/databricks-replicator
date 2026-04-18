@@ -18,6 +18,13 @@ cloud_url_mapping:
   "abfss://aaboode@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/aaron2/"
   "abfss://deltalake@oneenvadls.dfs.core.windows.net/aamin/": "s3://one-env-uc-external-location/aaron2/aa_cat/"
 
+# Optional: Tag policy configuration. Omit `tag_policies` to replicate all
+# tag policies on the source, or list specific keys to scope the set.
+tag_policy_config:
+  tag_policies:
+    - cost_center
+    - environment
+
 audit_config:
   audit_table: "data_replication.audit.audit_logging"
 
