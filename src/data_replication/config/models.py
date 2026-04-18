@@ -100,6 +100,7 @@ class CredentialType(str, Enum):
     AWS = "aws"
     AZURE_ACCESS_CONNECTOR = "azure_access_connector"
     AZURE_MANAGED_IDENTITY = "azure_managed_identity"
+    GCP_SERVICE_ACCOUNT = "gcp_service_account"
 
 
 class SecretConfig(BaseModel):

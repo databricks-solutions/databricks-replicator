@@ -15,6 +15,7 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.catalog import (
     AwsIamRoleRequest,
     AzureManagedIdentityRequest,
+    DatabricksGcpServiceAccountRequest,
 )
 
 from ..audit.audit_logger import AuditLogger
@@ -549,6 +550,23 @@ class ProviderFactory:
                         dict_for_creation["azure_managed_identity"] = credential_request
                         dict_for_update["azure_managed_identity"] = credential_request
 
+                    if (
+                        self.config.storage_credential_config.target_credential_type
+                        == "gcp_service_account"
+                    ):
+                        credential_request = DatabricksGcpServiceAccountRequest()
+                        dict_for_creation["databricks_gcp_service_account"] = (
+                            credential_request
+                        )
+                        dict_for_update["databricks_gcp_service_account"] = (
+                            credential_request
+                        )
+                        # GCP: Databricks auto-provisions the service account on
+                        # create and returns its email. The SA has no GCS access
+                        # until the user grants it on the bucket out-of-band, so
+                        # skip validation to let create/update succeed.
+                        dict_for_creation["skip_validation"] = True
+
                     # Check if target storage credential already exists
                     credential_exists = False
                     target_credential_info = None
@@ -568,12 +586,35 @@ class ProviderFactory:
 
                     if not credential_exists:
                         # Create storage credential
-                        _ = self.target_db_ops.create_storage_credential(
-                            dict_for_creation
+                        created_credential_info = (
+                            self.target_db_ops.create_storage_credential(
+                                dict_for_creation
+                            )
                         )
                         self.logger.info(
                             f"Created storage credential {target_credential_name}"
                         )
+                        if (
+                            self.config.storage_credential_config.target_credential_type
+                            == "gcp_service_account"
+                        ):
+                            gcp_sa = getattr(
+                                created_credential_info,
+                                "databricks_gcp_service_account",
+                                None,
+                            )
+                            gcp_sa_email = getattr(gcp_sa, "email", None)
+                            self.logger.warning(
+                                "GCP storage credential %s created with validation skipped. "
+                                "Databricks-managed service account: %s. "
+                                "Before this credential can access GCS, grant the service account "
+                                "the required role on each target bucket, e.g.:\n"
+                                "  gcloud storage buckets add-iam-policy-binding gs://<bucket> "
+                                "--member=\"serviceAccount:%s\" --role=\"roles/storage.objectAdmin\"",
+                                target_credential_name,
+                                gcp_sa_email or "<unknown>",
+                                gcp_sa_email or "<unknown>",
+                            )
                     else:
                         # Update existing storage credential - compare target and source dicts like catalog pattern
                         dict_for_update_target = {
@@ -774,9 +815,18 @@ class ProviderFactory:
 
                     dict_for_creation["name"] = target_location_name
                     dict_for_creation["url"] = target_url
-                    dict_for_creation["skip_validation"] = (
-                        False  # Always validate on target
+                    # Default: validate on target. Exception: GCP storage
+                    # credentials depend on out-of-band bucket-level IAM being
+                    # granted to the Databricks-managed service account, which
+                    # cannot happen before this call. Skip validation so the
+                    # location is created; customer must grant GCS access and
+                    # re-run validation afterwards.
+                    is_gcp_target = (
+                        self.config.storage_credential_config is not None
+                        and self.config.storage_credential_config.target_credential_type
+                        == "gcp_service_account"
                     )
+                    dict_for_creation["skip_validation"] = is_gcp_target
 
                     dict_for_update["name"] = target_location_name
                     dict_for_update["url"] = target_url
@@ -804,6 +854,18 @@ class ProviderFactory:
                         self.logger.info(
                             f"Created external location {target_location_name}"
                         )
+                        if is_gcp_target:
+                            self.logger.warning(
+                                "External location %s created with validation skipped "
+                                "(GCP target). Access will fail until the Databricks-managed "
+                                "service account for the backing storage credential is granted "
+                                "GCS access, e.g.: "
+                                "gcloud storage buckets add-iam-policy-binding %s "
+                                "--member=\"serviceAccount:<sa-email>\" "
+                                "--role=\"roles/storage.objectAdmin\"",
+                                target_location_name,
+                                target_url,
+                            )
                     else:
                         # Update existing external location - compare target and source dicts like catalog pattern
                         dict_for_update_target = {
