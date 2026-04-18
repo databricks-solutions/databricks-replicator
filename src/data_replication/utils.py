@@ -165,28 +165,28 @@ def retry_with_logging(retry_config, logger=None):
 
             for attempt in range(1, retry_config.max_attempts + 1):
                 try:
+                    max_attempts = retry_config.max_attempts
                     if logger and hasattr(logger, "debug"):
                         logger.debug(
-                            f"Attempting {func.__name__} (attempt {attempt}/{retry_config.max_attempts})"
+                            f"Attempting {func.__name__} "
+                            f"(attempt {attempt}/{max_attempts})"
                         )
 
                     result = func(*args, **kwargs)
 
-                    # logger.info(
-                    #     f"{func.__name__} succeeded on attempt {attempt}/{retry_config.max_attempts}"
-                    # )
-
-                    return result, None, attempt, retry_config.max_attempts
+                    return result, None, attempt, max_attempts
 
                 except Exception as e:
                     last_exception = e
+                    max_attempts = retry_config.max_attempts
 
                     if logger and hasattr(logger, "warning"):
                         logger.warning(
-                            f"{func.__name__} failed on attempt {attempt}/{retry_config.max_attempts}: {str(e)}"
+                            f"{func.__name__} failed on attempt "
+                            f"{attempt}/{max_attempts}: {str(e)}"
                         )
 
-                    if attempt < retry_config.max_attempts:
+                    if attempt < max_attempts:
                         if logger and hasattr(logger, "debug"):
                             logger.debug(
                                 f"Waiting {current_delay:.1f}s before retry..."
@@ -195,12 +195,14 @@ def retry_with_logging(retry_config, logger=None):
                         current_delay *= 2.0  # Exponential backoff
                         if logger and hasattr(logger, "info"):
                             logger.info(
-                                f"{func.__name__} failed on attempt {attempt}/{retry_config.max_attempts}"
+                                f"{func.__name__} failed on attempt "
+                                f"{attempt}/{max_attempts}"
                             )
                     else:
                         if logger and hasattr(logger, "error"):
                             logger.error(
-                                f"{func.__name__} failed after {retry_config.max_attempts} attempts"
+                                f"{func.__name__} failed after "
+                                f"{max_attempts} attempts"
                             )
 
             return False, last_exception, attempt, retry_config.max_attempts
@@ -374,10 +376,11 @@ def map_cloud_url(source_storage_root: str, cloud_url_mapping: dict) -> Optional
         return None
 
     # Find matching source external location
+    src_root_lower = source_storage_root.lower()
     for src_location, tgt_location in cloud_url_mapping.items():
-        if source_storage_root.lower().startswith(src_location.lower()) or source_storage_root.lower().startswith(
-            src_location.rstrip("/").lower()
-        ):
+        if src_root_lower.startswith(
+            src_location.lower()
+        ) or src_root_lower.startswith(src_location.rstrip("/").lower()):
             # Calculate relative path and construct target location
             relative_path = source_storage_root[len(src_location) :].lstrip("/")
             target_storage_root = (
@@ -499,10 +502,10 @@ def recursive_substitute(obj, substitute_value, target_pattern=""):
 def unwrap_retry_error(error: Exception) -> str:
     """
     Unwrap RetryError to get the actual underlying exception message.
-    
+
     Args:
         error: The exception to unwrap
-        
+
     Returns:
         String representation of the underlying error
     """
@@ -511,6 +514,6 @@ def unwrap_retry_error(error: Exception) -> str:
         if hasattr(error, 'last_attempt') and error.last_attempt:
             if hasattr(error.last_attempt, 'exception'):
                 return str(error.last_attempt.exception())
-            elif hasattr(error.last_attempt, 'result'):
+            if hasattr(error.last_attempt, 'result'):
                 return str(error.last_attempt.result())
     return str(error)
