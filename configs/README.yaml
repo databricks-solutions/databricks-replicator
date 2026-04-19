@@ -163,12 +163,16 @@ replication_config:
   # Optional: whether to create or replace view during UC view replication. default is true to use create or replace view.
   create_or_replace_view: true
   # Optional: whether to create or replace materialized view during UC materialized view replication. default is true to use create or replace materialized view.
+  # Note: MV is created from source SHOW CREATE TABLE DDL, which embeds table/column COMMENTs and column DEFAULTs. Incremental column_comment replication is NOT supported for MVs — set this to true to pick up later comment/DDL changes.
   create_or_replace_materialized_view: true
   # Optional: whether to create or replace streaming table during UC streaming table replication. default is false.
+  # Note: ST is created from source SHOW CREATE TABLE DDL (embeds COMMENTs/DEFAULTs on initial creation). Unlike MV, column_comment replication IS supported incrementally for ST via ALTER STREAMING TABLE.
   create_or_replace_streaming_table: false
   # Optional: whether to overwrite tags during replication. default is true.
+  # Tag replication applies to catalog, schema, table/view/SQL MV/SQL ST, column, and volume. Foreign tables and DLT-defined MV/ST are skipped because the target object does not exist.
   overwrite_tags: true
   # Optional: whether to overwrite comments during replication. default is true.
+  # Column comment replication is supported for managed/external tables, views, and SQL streaming tables. Materialized views are skipped — declare column comments in the CREATE DDL or DLT pipeline instead.
   overwrite_comments: true
   # Optional: grant replication mode. default is false (principal-scoped overwrite:
   # sync each source principal's privileges onto target; target-only principals

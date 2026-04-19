@@ -23,11 +23,11 @@ This system provides incremental data and UC metadata replication capabilities b
 | Tables | Supported |
 | Views | Supported |
 | Table/View Comments | Supported |
-| SQL-based Materialized Views | Supported | DLT-based MV should be recreated by DLT in target
-| SQL-based Streaming Tables | Supported | DLT-based ST should be recreated by DLT in target
-| Tags (catalog, schema, table, columns, views, volume) | Supported |
-| Column Comments | Supported |
-| Grants (catalog, schema, table/view/MV/ST, volume) | Supported | Principal-scoped sync; source principals optionally remapped via `principal_mapping`. Ownership not replicated. |
+| SQL-based Materialized Views | Supported | Table/column COMMENTs and DEFAULTs come through the CREATE DDL on initial creation. DLT-based MV should be recreated by DLT in target |
+| SQL-based Streaming Tables | Supported | Table/column COMMENTs and DEFAULTs come through the CREATE DDL on initial creation. DLT-based ST should be recreated by DLT in target |
+| Tags | Supported | catalog, schema, table/view/SQL MV/SQL ST, columns, views, volume. Foreign tables and DLT-defined MV/ST are skipped (target does not exist) |
+| Column Comments | Supported | Supported for managed/external tables, views, and SQL streaming tables. Materialized views are skipped — declare column comments in the MV CREATE DDL or DLT pipeline instead |
+| Grants | Supported |  catalog, schema, table/view/SQL MV/SQL ST, volume. Per-securable, per-principal sync of UC privileges.  **Not replicated**: object ownership, row/column filters. Foreign tables and DLT-defined MV/ST are skipped (target does not exist). |
 | Functions | In Development |
 | Models | In Development |
 

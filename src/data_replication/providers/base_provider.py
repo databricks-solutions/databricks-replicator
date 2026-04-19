@@ -13,12 +13,14 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import List, Optional
 import random
+import re
 
 from databricks.connect import DatabricksSession
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.catalog import (
     EnablePredictiveOptimization,
     PermissionsChange,
+    Privilege,
 )
 
 from pyspark.sql.utils import AnalysisException
@@ -118,6 +120,12 @@ class BaseProvider(ABC):
             for result in completed_run_results or []
         ]
         self.shared_tables: List[str] = []
+        # Per-principal SP resolution caches (populated lazily by _map_principal).
+        # _sp_src_app_id_to_name: source application_id -> source display_name
+        # _sp_tgt_name_to_app_id: target display_name -> target application_id
+        # Both caches store None for misses to avoid repeated SDK calls.
+        self._sp_src_app_id_to_name: dict = {}
+        self._sp_tgt_name_to_app_id: dict = {}
 
     @abstractmethod
     def setup_operation_catalogs(self):
@@ -602,6 +610,7 @@ class BaseProvider(ABC):
                         t in self.catalog_config.uc_object_types
                         for t in [
                             UCObjectType.TABLE_TAG,
+                            UCObjectType.TABLE_GRANT,
                             UCObjectType.ALL,
                             UCObjectType.COLUMN_TAG,
                             UCObjectType.COLUMN_COMMENT,
@@ -622,6 +631,7 @@ class BaseProvider(ABC):
                         t in self.catalog_config.uc_object_types
                         for t in [
                             UCObjectType.VOLUME_TAG,
+                            UCObjectType.VOLUME_GRANT,
                             UCObjectType.VOLUME,
                             UCObjectType.ALL,
                         ]
@@ -1324,6 +1334,16 @@ class BaseProvider(ABC):
                     table_types_set.update(["materialized_view"])
                 if UCObjectType.STREAMING_TABLE in schema_config.uc_object_types:
                     table_types_set.update(["streaming_table"])
+                # Grants and tags apply to every table kind — don't narrow the set.
+                if (
+                    UCObjectType.TABLE_GRANT in schema_config.uc_object_types
+                    or UCObjectType.TABLE_TAG in schema_config.uc_object_types
+                    or UCObjectType.COLUMN_TAG in schema_config.uc_object_types
+                    or UCObjectType.COLUMN_COMMENT in schema_config.uc_object_types
+                ):
+                    table_types_set.update(
+                        ["managed", "external", "view", "materialized_view", "streaming_table"]
+                    )
                 if table_types_set:
                     table_types = list(table_types_set)
 
@@ -1388,6 +1408,7 @@ class BaseProvider(ABC):
         if schema_config.uc_object_types and (
             UCObjectType.VOLUME in schema_config.uc_object_types
             or UCObjectType.VOLUME_TAG in schema_config.uc_object_types
+            or UCObjectType.VOLUME_GRANT in schema_config.uc_object_types
             or UCObjectType.ALL in schema_config.uc_object_types
         ):
             volume_types.extend(["managed", "external"])
@@ -1817,93 +1838,90 @@ class BaseProvider(ABC):
         run_results.append(run_result)
         return run_results
 
-    def _get_sp_name_caches(self) -> tuple:
-        """
-        Lazily build (source_uuid_to_name, target_name_to_uuid) caches so SPs
-        can be mapped by display name rather than application_id UUID.
+    @staticmethod
+    def _looks_like_sp_uuid(s: Optional[str]) -> bool:
+        # application_id is a lowercase UUID; users/groups are emails or names
+        if not s or "@" in s or len(s) != 36:
+            return False
+        return bool(re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", s))
 
-        Returns two empty dicts when either source/target DBOps is missing or
-        when the workspace doesn't expose service_principals listing; in that
-        case _map_principal quietly falls back to string-exact matching.
-        """
-        if getattr(self, "_sp_caches_built", False):
-            return self._sp_uuid_to_name_src, self._sp_name_to_uuid_tgt
+    def _resolve_source_sp_name(self, app_id: str) -> Optional[str]:
+        """Look up (and cache) the source SP display name for a given app_id."""
+        if app_id in self._sp_src_app_id_to_name:
+            return self._sp_src_app_id_to_name[app_id]
+        name = None
+        if self.source_dbops is not None:
+            try:
+                name = self.source_dbops.get_sp_display_name_by_app_id(app_id)
+            except Exception:
+                name = None
+        self._sp_src_app_id_to_name[app_id] = name
+        return name
 
-        src_uuid_to_name: dict = {}
-        tgt_uuid_to_name: dict = {}
-        try:
-            if self.source_dbops is not None:
-                src_uuid_to_name = self.source_dbops.list_service_principal_name_map()
-        except Exception:
-            src_uuid_to_name = {}
-        try:
-            if self.target_dbops is not None:
-                tgt_uuid_to_name = self.target_dbops.list_service_principal_name_map()
-        except Exception:
-            tgt_uuid_to_name = {}
-
-        # Build reverse lookup target_name -> target_uuid; warn on duplicate
-        # display names (first-seen wins) since the mapping is ambiguous.
-        tgt_name_to_uuid: dict = {}
-        duplicates: list = []
-        for uuid, name in tgt_uuid_to_name.items():
-            if name in tgt_name_to_uuid:
-                duplicates.append(name)
-                continue
-            tgt_name_to_uuid[name] = uuid
-        if duplicates and self.logger:
-            self.logger.warning(
-                "Target workspace has service principals sharing display names; "
-                "name-based SP mapping will use the first application_id seen. "
-                "Ambiguous names: %s",
-                sorted(set(duplicates)),
-            )
-
-        self._sp_uuid_to_name_src = src_uuid_to_name
-        self._sp_name_to_uuid_tgt = tgt_name_to_uuid
-        self._sp_caches_built = True
-        return src_uuid_to_name, tgt_name_to_uuid
+    def _resolve_target_sp_app_id(self, display_name: str) -> Optional[str]:
+        """Look up (and cache) the target SP application_id for a given display name."""
+        if display_name in self._sp_tgt_name_to_app_id:
+            return self._sp_tgt_name_to_app_id[display_name]
+        app_id = None
+        if self.target_dbops is not None:
+            try:
+                app_id = self.target_dbops.get_sp_app_id_by_display_name(display_name)
+            except Exception:
+                app_id = None
+        self._sp_tgt_name_to_app_id[display_name] = app_id
+        return app_id
 
     def _map_principal(self, principal: Optional[str]) -> Optional[str]:
         """
-        Map a source principal string to a target principal string using the
-        system-level ``principal_mapping`` dict.
+        Map a source principal string to a target principal string.
 
         Lookup order:
-          1. Exact key match in principal_mapping (user email, group name, or
-             SP application_id UUID).
-          2. If the source principal is an SP UUID, resolve it to the source
-             SP display name via the source workspace and try the mapping
-             again using the display name. If the mapped value is itself a
-             display name, resolve it back to the target workspace's UUID.
+          1. Exact key match in ``principal_mapping`` (user email, group name,
+             or SP application_id UUID). If the mapped value looks like an SP
+             display name, resolve it to the target application_id.
+          2. If the source principal is an SP application_id UUID, resolve it
+             to its display name on the source workspace. Then:
+               a. if that name is in the mapping, use the mapped value; if
+                  the mapped value is a display name, resolve to target UUID.
+               b. otherwise assume the target SP uses the same display name
+                  and resolve it to a target UUID.
           3. Fall through verbatim.
+
+        SP lookups are targeted (SCIM filter by application_id or display
+        name) and results are cached per principal, so users/groups never hit
+        the SP API.
         """
         if principal is None:
             return None
         mapping = self.principal_mapping or {}
 
-        # Step 1: exact match wins — covers users/groups and explicit UUID->UUID
+        def _resolve_mapped(value: Optional[str]) -> Optional[str]:
+            # Values that are already UUIDs are used verbatim. Anything else
+            # (display name, email-style SP name, group name, or real user
+            # email) is attempted as a target SP display name; if the SCIM
+            # lookup misses, fall back to the value verbatim so real users
+            # and groups still work.
+            if not value or self._looks_like_sp_uuid(value):
+                return value
+            tgt_uuid = self._resolve_target_sp_app_id(value)
+            return tgt_uuid or value
+
+        # Step 1: exact match — users/groups and explicit UUID->UUID
         if principal in mapping:
-            mapped = mapping[principal]
-            # If the mapped value is a display name that resolves to a target
-            # UUID, translate it (so operators can write SP name -> SP name
-            # even when the target principal must ultimately be a UUID).
-            _, tgt_name_to_uuid = self._get_sp_name_caches()
-            if mapped in tgt_name_to_uuid:
-                return tgt_name_to_uuid[mapped]
-            return mapped
+            return _resolve_mapped(mapping[principal])
 
-        # Step 2: SP-by-name mapping — only meaningful if mapping is non-empty
-        if mapping:
-            src_uuid_to_name, tgt_name_to_uuid = self._get_sp_name_caches()
-            source_name = src_uuid_to_name.get(principal)
-            if source_name and source_name in mapping:
-                mapped = mapping[source_name]
-                if mapped in tgt_name_to_uuid:
-                    return tgt_name_to_uuid[mapped]
-                return mapped
+        # Step 2: source principal is an SP UUID — resolve its display name
+        if self._looks_like_sp_uuid(principal):
+            src_name = self._resolve_source_sp_name(principal)
+            if src_name:
+                if src_name in mapping:
+                    return _resolve_mapped(mapping[src_name])
+                # No explicit mapping — assume the target SP shares the name.
+                tgt_uuid = self._resolve_target_sp_app_id(src_name)
+                if tgt_uuid:
+                    return tgt_uuid
 
-        # Step 3: verbatim fallthrough
+        # Step 3: verbatim
         return principal
 
     def _diff_privileges_per_principal(
@@ -1911,10 +1929,15 @@ class BaseProvider(ABC):
         source_assignments: List,
         target_assignments: List,
         overwrite_grants: bool = False,
-    ) -> List[PermissionsChange]:
+    ) -> tuple:
         """
         Build per-principal add/remove PermissionsChange entries from source
         and target PrivilegeAssignment lists.
+
+        Returns a tuple ``(changes, skipped)`` where ``skipped`` is a list of
+        ``{"principal", "reason"}`` dicts for source principals that could not
+        be resolved to a target principal and were therefore excluded from
+        ``changes``.
 
         Default (overwrite_grants=False, principal-scoped overwrite):
           - for each source principal, the target's privileges for that
@@ -1929,11 +1952,35 @@ class BaseProvider(ABC):
 
         Source principals are passed through principal_mapping first.
         """
+        skipped: list = []
         # source_by_principal maps mapped-principal -> set(privilege values)
         source_by_principal: dict = {}
         for pa in source_assignments or []:
-            mapped = self._map_principal(getattr(pa, "principal", None))
+            raw = getattr(pa, "principal", None)
+            mapped = self._map_principal(raw)
             if not mapped:
+                continue
+            # If the source principal is an SP UUID and the result is the
+            # same verbatim UUID, we failed to resolve it to a known target
+            # principal. Including it would be rejected by the UC API; skip
+            # with a warning so the rest of the grants can still apply.
+            if (
+                mapped == raw
+                and self._looks_like_sp_uuid(raw)
+                and raw not in (self.principal_mapping or {})
+            ):
+                src_name = self._sp_src_app_id_to_name.get(raw)
+                reason = (
+                    f"source SP {raw}"
+                    + (f" (display_name={src_name!r})" if src_name else " (source display_name unresolved)")
+                    + " has no matching principal on target; add an entry to principal_mapping to map it"
+                )
+                skipped.append({"principal": raw, "reason": reason})
+                if self.logger:
+                    self.logger.warning(
+                        f"Skipping source SP {raw}: no matching principal on "
+                        "target (add an entry to principal_mapping to map it)"
+                    )
                 continue
             privs = {
                 getattr(p, "value", p) for p in (getattr(pa, "privileges", None) or [])
@@ -1950,6 +1997,17 @@ class BaseProvider(ABC):
             }
             target_by_principal.setdefault(principal, set()).update(privs)
 
+        def _to_privileges(names):
+            out = []
+            for n in names:
+                try:
+                    out.append(Privilege(n))
+                except ValueError:
+                    self.logger.warning(
+                        f"Skipping unknown privilege {n!r} not in Privilege enum"
+                    )
+            return out
+
         changes: List[PermissionsChange] = []
         for principal, source_privs in source_by_principal.items():
             target_privs = target_by_principal.get(principal, set())
@@ -1960,8 +2018,8 @@ class BaseProvider(ABC):
             changes.append(
                 PermissionsChange(
                     principal=principal,
-                    add=sorted(to_add) or None,
-                    remove=sorted(to_remove) or None,
+                    add=_to_privileges(sorted(to_add)) or None,
+                    remove=_to_privileges(sorted(to_remove)) or None,
                 )
             )
 
@@ -1973,10 +2031,10 @@ class BaseProvider(ABC):
                     PermissionsChange(
                         principal=principal,
                         add=None,
-                        remove=sorted(target_privs),
+                        remove=_to_privileges(sorted(target_privs)),
                     )
                 )
-        return changes
+        return changes, skipped
 
     def _replicate_grants(
         self,
@@ -2006,14 +2064,27 @@ class BaseProvider(ABC):
                 extra={"run_id": self.run_id, "operation": "uc_replication"},
             )
 
+            self.logger.info(
+                f"Fetching source grants: {securable_type} {source_full_name}",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
             source_assignments = self.source_dbops.get_grants(
                 securable_type, source_full_name
+            )
+            self.logger.info(
+                f"Fetched {len(source_assignments)} source grants; fetching target grants: "
+                f"{securable_type} {target_full_name}",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
             )
             target_assignments = self.target_dbops.get_grants(
                 securable_type, target_full_name
             )
+            self.logger.info(
+                f"Fetched {len(target_assignments)} target grants",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
 
-            changes = self._diff_privileges_per_principal(
+            changes, skipped_principals = self._diff_privileges_per_principal(
                 source_assignments,
                 target_assignments,
                 overwrite_grants=overwrite_grants,
@@ -2021,11 +2092,46 @@ class BaseProvider(ABC):
 
             end_time = datetime.now(timezone.utc)
             if not changes:
+                duration = (end_time - start_time).total_seconds()
+                if skipped_principals:
+                    error_msg = (
+                        f"{object_type} replication failed: "
+                        f"{source_full_name} -> {target_full_name} | "
+                        f"{len(skipped_principals)} principal(s) skipped, "
+                        "no applicable changes"
+                    )
+                    self.logger.error(
+                        error_msg,
+                        extra={"run_id": self.run_id, "operation": "uc_replication"},
+                    )
+                    return RunResult(
+                        operation_type="uc_replication",
+                        catalog_name=target_catalog,
+                        schema_name=schema_name,
+                        object_name=object_name or target_catalog,
+                        object_type=object_type,
+                        status="failed",
+                        start_time=start_time.isoformat(),
+                        end_time=end_time.isoformat(),
+                        duration_seconds=duration,
+                        error_message=(
+                            f"{len(skipped_principals)} unresolvable principal(s) skipped"
+                        ),
+                        details={
+                            "source_object": source_full_name,
+                            "target_object": target_full_name,
+                            "principals_synced": 0,
+                            "principals_skipped": len(skipped_principals),
+                            "skipped_principals": skipped_principals,
+                            "overwrite_grants": overwrite_grants,
+                        },
+                        attempt_number=attempt,
+                        max_attempts=max_attempts,
+                    )
                 self.logger.info(
                     f"No grant changes needed: {source_full_name} -> {target_full_name}",
                     extra={"run_id": self.run_id, "operation": "uc_replication"},
                 )
-                duration = (end_time - start_time).total_seconds()
                 return RunResult(
                     operation_type="uc_replication",
                     catalog_name=target_catalog,
@@ -2066,9 +2172,9 @@ class BaseProvider(ABC):
 
             if not batch_ok:
                 self.logger.warning(
-                    "Batch grant apply failed for %s (%s); retrying per principal",
-                    target_full_name,
-                    str(batch_exc) if batch_exc else "unknown",
+                    f"Batch grant apply failed for {target_full_name} "
+                    f"({str(batch_exc) if batch_exc else 'unknown'}); "
+                    f"retrying per principal",
                     extra={"run_id": self.run_id, "operation": "uc_replication"},
                 )
                 for change in changes:
@@ -2086,10 +2192,9 @@ class BaseProvider(ABC):
                             }
                         )
                         self.logger.warning(
-                            "Per-principal grant apply failed for %s on %s: %s",
-                            getattr(change, "principal", None),
-                            target_full_name,
-                            str(pe),
+                            f"Per-principal grant apply failed for "
+                            f"{getattr(change, 'principal', None)} on "
+                            f"{target_full_name}: {str(pe)}",
                             extra={"run_id": self.run_id, "operation": "uc_replication"},
                         )
 
@@ -2102,28 +2207,50 @@ class BaseProvider(ABC):
             fully_ok = batch_ok or failed_count == 0
             partially_ok = (not batch_ok) and failed_count > 0 and applied > 0
 
+            skipped_count = len(skipped_principals)
+
             if fully_ok:
-                self.logger.info(
-                    f"{object_type} replication completed: {source_full_name} -> {target_full_name} "
-                    f"({total} principals, {duration:.2f}s)",
-                    extra={"run_id": self.run_id, "operation": "uc_replication"},
-                )
+                # Any unresolvable (skipped) source principals downgrade the
+                # overall result to "failed" so the operator sees them in the
+                # summary and the audit log, with the offenders in details.
+                status = "failed" if skipped_count else "success"
+                if skipped_count:
+                    self.logger.error(
+                        f"{object_type} replication failed (applied {applied}/{total}; "
+                        f"{skipped_count} source principal(s) skipped): "
+                        f"{source_full_name} -> {target_full_name} ({duration:.2f}s)",
+                        extra={"run_id": self.run_id, "operation": "uc_replication"},
+                    )
+                else:
+                    self.logger.info(
+                        f"{object_type} replication completed: {source_full_name} -> {target_full_name} "
+                        f"({total} principals, {duration:.2f}s)",
+                        extra={"run_id": self.run_id, "operation": "uc_replication"},
+                    )
+                details = {
+                    "source_object": source_full_name,
+                    "target_object": target_full_name,
+                    "principals_synced": total,
+                    "overwrite_grants": overwrite_grants,
+                }
+                if skipped_count:
+                    details["principals_skipped"] = skipped_count
+                    details["skipped_principals"] = skipped_principals
                 return RunResult(
                     operation_type="uc_replication",
                     catalog_name=target_catalog,
                     schema_name=schema_name,
                     object_name=object_name or target_catalog,
                     object_type=object_type,
-                    status="success",
+                    status=status,
                     start_time=start_time.isoformat(),
                     end_time=end_time.isoformat(),
                     duration_seconds=duration,
-                    details={
-                        "source_object": source_full_name,
-                        "target_object": target_full_name,
-                        "principals_synced": total,
-                        "overwrite_grants": overwrite_grants,
-                    },
+                    error_message=(
+                        f"{skipped_count} unresolvable principal(s) skipped"
+                        if skipped_count else None
+                    ),
+                    details=details,
                     attempt_number=attempt,
                     max_attempts=max_attempts,
                 )
@@ -2132,27 +2259,38 @@ class BaseProvider(ABC):
             if partially_ok:
                 self.logger.warning(
                     f"{object_type} partial: {source_full_name} -> {target_full_name} "
-                    f"({applied}/{total} principals applied, {failed_count} failed)",
+                    f"({applied}/{total} principals applied, {failed_count} failed, "
+                    f"{skipped_count} skipped)",
                     extra={"run_id": self.run_id, "operation": "uc_replication"},
                 )
+                # Any skip or per-principal failure makes the overall result
+                # failed so it surfaces in the summary + audit.
+                details = {
+                    "source_object": source_full_name,
+                    "target_object": target_full_name,
+                    "principals_synced": applied,
+                    "principals_failed": failed_count,
+                    "failed_principals": per_principal_failures,
+                    "overwrite_grants": overwrite_grants,
+                }
+                if skipped_count:
+                    details["principals_skipped"] = skipped_count
+                    details["skipped_principals"] = skipped_principals
                 return RunResult(
                     operation_type="uc_replication",
                     catalog_name=target_catalog,
                     schema_name=schema_name,
                     object_name=object_name or target_catalog,
                     object_type=object_type,
-                    status="success",
+                    status="failed",
                     start_time=start_time.isoformat(),
                     end_time=end_time.isoformat(),
                     duration_seconds=duration,
-                    details={
-                        "source_object": source_full_name,
-                        "target_object": target_full_name,
-                        "principals_synced": applied,
-                        "principals_failed": failed_count,
-                        "failed_principals": per_principal_failures,
-                        "overwrite_grants": overwrite_grants,
-                    },
+                    error_message=(
+                        f"{failed_count} principal(s) failed"
+                        + (f", {skipped_count} skipped" if skipped_count else "")
+                    ),
+                    details=details,
                     attempt_number=attempt,
                     max_attempts=max_attempts,
                 )

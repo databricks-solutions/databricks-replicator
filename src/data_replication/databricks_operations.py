@@ -1565,29 +1565,37 @@ class DatabricksOperations:
         except Exception as e:
             raise Exception(f"Failed to update external location: {str(e)}") from e
 
-    def list_service_principal_name_map(self) -> dict:
+    def get_sp_display_name_by_app_id(self, application_id: str) -> Optional[str]:
         """
-        Build a dict mapping application_id (UUID) -> display_name for every
-        service principal visible in this workspace. Used by grant replication
-        to let callers map SPs by display name rather than cloud-provider UUID.
-
-        Returns empty dict if the workspace_client has no service_principals
-        API access or if listing fails — callers should treat that as
-        "name-based SP mapping unavailable".
+        Look up a service principal's display name by its application_id using
+        a SCIM filter query. Returns None if the workspace_client is missing,
+        the SP is not found, or the API call fails.
         """
-        if not self.workspace_client:
-            return {}
-
-        name_map: dict = {}
+        if not self.workspace_client or not application_id:
+            return None
         try:
-            for sp in self.workspace_client.service_principals.list():
-                app_id = getattr(sp, "application_id", None)
-                display_name = getattr(sp, "display_name", None)
-                if app_id and display_name:
-                    name_map[app_id] = display_name
-            return name_map
+            scim_filter = f"applicationId eq '{application_id}'"
+            for sp in self.workspace_client.service_principals.list(filter=scim_filter):
+                return getattr(sp, "display_name", None)
+            return None
         except Exception:
-            return {}
+            return None
+
+    def get_sp_app_id_by_display_name(self, display_name: str) -> Optional[str]:
+        """
+        Look up a service principal's application_id by its display name using
+        a SCIM filter query. Returns None if the workspace_client is missing,
+        the SP is not found, or the API call fails.
+        """
+        if not self.workspace_client or not display_name:
+            return None
+        try:
+            scim_filter = f"displayName eq '{display_name}'"
+            for sp in self.workspace_client.service_principals.list(filter=scim_filter):
+                return getattr(sp, "application_id", None)
+            return None
+        except Exception:
+            return None
 
     def get_grants(
         self, securable_type: str, full_name: str
@@ -1614,6 +1622,7 @@ class DatabricksOperations:
 
         assignments: List[PrivilegeAssignment] = []
         page_token: Optional[str] = None
+        seen_tokens: set = set()
         try:
             while True:
                 response = self.workspace_client.grants.get(
@@ -1622,9 +1631,11 @@ class DatabricksOperations:
                     page_token=page_token,
                 )
                 assignments.extend(response.privilege_assignments or [])
-                page_token = getattr(response, "next_page_token", None)
-                if not page_token:
+                next_token = getattr(response, "next_page_token", None)
+                if not next_token or next_token == page_token or next_token in seen_tokens:
                     break
+                seen_tokens.add(next_token)
+                page_token = next_token
             return assignments
         except Exception as e:
             raise Exception(

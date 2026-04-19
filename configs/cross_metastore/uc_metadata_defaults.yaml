@@ -22,6 +22,9 @@ tag_policy_config:
   tag_policies:
     - abac
 
+principal_mapping:
+  feinfra-maintenance-sp-azure: fe-infra-management_feinfra-ops@databricks.com
+
 audit_config:
   audit_table: "data_replication.audit.audit_logging"
 
