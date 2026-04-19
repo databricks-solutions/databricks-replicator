@@ -23,11 +23,11 @@ This system provides incremental data and UC metadata replication capabilities b
 | Tables | Supported |
 | Views | Supported |
 | Table/View Comments | Supported |
-| SQL-based Materialized Views | Supported | DLT-based MV should be recreated by DLT in target
-| SQL-based Streaming Tables | Supported | DLT-based ST should be recreated by DLT in target
-| Tags (catalog, schema, table, columns, views, volume) | Supported |
-| Column Comments | Supported |
-| Permissions | In Development |
+| SQL-based Materialized Views | Supported | Table/column COMMENTs and DEFAULTs come through the CREATE DDL on initial creation. DLT-based MV should be recreated by DLT in target |
+| SQL-based Streaming Tables | Supported | Table/column COMMENTs and DEFAULTs come through the CREATE DDL on initial creation. DLT-based ST should be recreated by DLT in target |
+| Tags | Supported | catalog, schema, table/view/SQL MV/SQL ST, columns, views, volume. Foreign tables and DLT-defined MV/ST are skipped (target does not exist) |
+| Column Comments | Supported | Supported for managed/external tables, views, and SQL streaming tables. Materialized views are skipped — declare column comments in the MV CREATE DDL or DLT pipeline instead |
+| Grants | Supported |  catalog, schema, table/view/SQL MV/SQL ST, volume. Per-securable, per-principal sync of UC privileges.  **Not replicated**: object ownership, row/column filters. Foreign tables and DLT-defined MV/ST are skipped (target does not exist). |
 | Functions | In Development |
 | Models | In Development |
 
@@ -172,7 +172,7 @@ data-replicator configs/cross_metastore/volume_defaults.yaml --validate-only
 # Replicate all uc metadata
 # Set storage_credential_config if storage credentials need to be replicated
 # Set cloud_url_mapping if external location or external table need to be replicated
-# Objects will be replicated in the following logical order: Storage credentials -> External locations -> Tag policies -> Catalogs -> Schemas -> Tables -> Views -> Volumes -> Column Tags -> Column Comments -> Permissions
+# Objects will be replicated in the following logical order: Storage credentials -> External locations -> Tag policies -> Catalogs (+ tags, grants) -> Schemas (+ tags, grants) -> Tables -> Views -> Volumes -> Table/Volume Tags -> Table/Volume Grants -> Column Tags -> Column Comments
 data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --uc-object-types all --target-catalogs catalog1,catalog2,catalog3
 
 # Replicate delta tables for specific catalogs

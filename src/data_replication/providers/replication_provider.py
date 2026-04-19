@@ -291,6 +291,15 @@ class ReplicationProvider(BaseProvider):
                 )
                 results.extend(result)
             if (
+                UCObjectType.TABLE_GRANT in self.catalog_config.uc_object_types
+                or UCObjectType.ALL in self.catalog_config.uc_object_types
+            ):
+                result = self._uc_replicate_table_grants(
+                    schema_name,
+                    table_config,
+                )
+                results.extend(result)
+            if (
                 UCObjectType.COLUMN_COMMENT in self.catalog_config.uc_object_types
                 or UCObjectType.ALL in self.catalog_config.uc_object_types
             ):
@@ -340,6 +349,20 @@ class ReplicationProvider(BaseProvider):
             )
         ):
             result = self._uc_replicate_volume_tags(
+                schema_name,
+                volume_config,
+            )
+            results.extend(result)
+        # Check for volume grant replication
+        if (
+            self.catalog_config.uc_object_types
+            and len(self.catalog_config.uc_object_types) > 0
+            and (
+                UCObjectType.VOLUME_GRANT in self.catalog_config.uc_object_types
+                or UCObjectType.ALL in self.catalog_config.uc_object_types
+            )
+        ):
+            result = self._uc_replicate_volume_grants(
                 schema_name,
                 volume_config,
             )
@@ -1583,6 +1606,135 @@ class ReplicationProvider(BaseProvider):
                 )
             )
         return run_results
+
+    def _uc_replicate_table_grants(
+        self,
+        schema_name: str,
+        table_config: TableConfig,
+    ) -> List[RunResult]:
+        """
+        Replicate grants for a single table-like securable (table, view,
+        materialized view, or streaming table) from source to target.
+        """
+        start_time = datetime.now(timezone.utc)
+        table_name = table_config.table_name
+        replication_config = table_config.replication_config
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+        source_table = f"`{source_catalog}`.`{schema_name}`.`{table_name}`"
+        target_table = f"`{target_catalog}`.`{schema_name}`.`{table_name}`"
+        max_attempts = table_config.retry.max_attempts
+
+        if self.source_spark.catalog.tableExists(
+            source_table
+        ) and self.target_spark.catalog.tableExists(target_table):
+            return [
+                self._replicate_grants(
+                    object_type="table_grant",
+                    securable_type="TABLE",
+                    source_full_name=f"{source_catalog}.{schema_name}.{table_name}",
+                    target_full_name=f"{target_catalog}.{schema_name}.{table_name}",
+                    target_catalog=target_catalog,
+                    schema_name=schema_name,
+                    object_name=table_name,
+                    retry=table_config.retry,
+                    overwrite_grants=bool(
+                        getattr(replication_config, "overwrite_grants", False)
+                    ),
+                )
+            ]
+
+        self.logger.warning(
+            f"Source or target table does not exist for table_grant replication: "
+            f"`{target_catalog}`.`{schema_name}`.`{table_name}`",
+            extra={"run_id": self.run_id, "operation": "replication"},
+        )
+        end_time = datetime.now(timezone.utc)
+        duration = (end_time - start_time).total_seconds()
+        return [
+            RunResult(
+                operation_type="uc_replication",
+                catalog_name=target_catalog,
+                schema_name=schema_name,
+                object_name=table_name,
+                object_type="table_grant",
+                status="failed",
+                start_time=start_time.isoformat(),
+                end_time=end_time.isoformat(),
+                duration_seconds=duration,
+                error_message="Source or Target table does not exist",
+                details={
+                    "source_object": source_table,
+                    "target_object": target_table,
+                },
+                attempt_number=1,
+                max_attempts=max_attempts,
+            )
+        ]
+
+    def _uc_replicate_volume_grants(
+        self,
+        schema_name: str,
+        volume_config,
+    ) -> List[RunResult]:
+        """
+        Replicate grants for a single volume from source to target.
+        """
+        start_time = datetime.now(timezone.utc)
+        volume_name = volume_config.volume_name
+        replication_config = volume_config.replication_config
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+        source_volume_full = f"{source_catalog}.{schema_name}.{volume_name}"
+        target_volume_full = f"{target_catalog}.{schema_name}.{volume_name}"
+        max_attempts = volume_config.retry.max_attempts
+
+        if self.source_dbops.if_volume_exists(
+            source_volume_full
+        ) and self.target_dbops.if_volume_exists(target_volume_full):
+            return [
+                self._replicate_grants(
+                    object_type="volume_grant",
+                    securable_type="VOLUME",
+                    source_full_name=source_volume_full,
+                    target_full_name=target_volume_full,
+                    target_catalog=target_catalog,
+                    schema_name=schema_name,
+                    object_name=volume_name,
+                    retry=volume_config.retry,
+                    overwrite_grants=bool(
+                        getattr(replication_config, "overwrite_grants", False)
+                    ),
+                )
+            ]
+
+        self.logger.warning(
+            f"Source or target volume does not exist for volume_grant replication: "
+            f"{target_volume_full}",
+            extra={"run_id": self.run_id, "operation": "replication"},
+        )
+        end_time = datetime.now(timezone.utc)
+        duration = (end_time - start_time).total_seconds()
+        return [
+            RunResult(
+                operation_type="uc_replication",
+                catalog_name=target_catalog,
+                schema_name=schema_name,
+                object_name=volume_name,
+                object_type="volume_grant",
+                status="failed",
+                start_time=start_time.isoformat(),
+                end_time=end_time.isoformat(),
+                duration_seconds=duration,
+                error_message="Source or Target volume does not exist",
+                details={
+                    "source_object": source_volume_full,
+                    "target_object": target_volume_full,
+                },
+                attempt_number=1,
+                max_attempts=max_attempts,
+            )
+        ]
 
     def _uc_replicate_column_tags(
         self,

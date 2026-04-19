@@ -38,6 +38,20 @@ storage_credential_config:
 cloud_url_mapping:
   "abfss://test@oneenvadls.dfs.core.windows.net/": "s3://one-env-uc-external-location/test/"
 
+# Optional: Principal mapping between source and target. Used only for grant
+# replication. Keys and values are principal strings: user email, group
+# display name, service principal application id (UUID), or service principal
+# display name. For SPs, both sides of the mapping can be display names — the
+# replicator looks up the source workspace for "source UUID -> display name"
+# and the target workspace for "display name -> target UUID" automatically.
+# Unmapped principals pass through verbatim (useful for groups/users that
+# exist with the same name on both sides).
+principal_mapping:
+  "alice@src.example.com": "alice@tgt.example.com"
+  "source-group": "target-group"
+  "etl-prod-sp": "etl-stg-sp"                # SP display-name -> display-name
+  "11111111-1111-1111-1111-111111111111": "22222222-2222-2222-2222-222222222222"  # explicit UUID -> UUID
+
 # Optional: External location configuration
 external_location_config:
   # Optional: external location to replicate. if not provided, all external locations matched in cloud_url_mapping will be replicated.
@@ -65,19 +79,22 @@ uc_object_types: [
     "tag_policy",
     "catalog",
     "catalog_tag",
+    "catalog_grant",
     "schema",
     "schema_tag",
+    "schema_grant",
     "table",
     "view",
     "table_comment",
     "table_tag",
+    "table_grant",
     "volume",
     "volume_tag",
+    "volume_grant",
     "column_tag",
     "column_comment",
     "materialized_view",
     "streaming_table",
-    # "permission"
   ]
 
 # Optional: replication group level table types for data replication or reconciliation
@@ -146,13 +163,22 @@ replication_config:
   # Optional: whether to create or replace view during UC view replication. default is true to use create or replace view.
   create_or_replace_view: true
   # Optional: whether to create or replace materialized view during UC materialized view replication. default is true to use create or replace materialized view.
+  # Note: MV is created from source SHOW CREATE TABLE DDL, which embeds table/column COMMENTs and column DEFAULTs. Incremental column_comment replication is NOT supported for MVs — set this to true to pick up later comment/DDL changes.
   create_or_replace_materialized_view: true
   # Optional: whether to create or replace streaming table during UC streaming table replication. default is false.
+  # Note: ST is created from source SHOW CREATE TABLE DDL (embeds COMMENTs/DEFAULTs on initial creation). Unlike MV, column_comment replication IS supported incrementally for ST via ALTER STREAMING TABLE.
   create_or_replace_streaming_table: false
   # Optional: whether to overwrite tags during replication. default is true.
+  # Tag replication applies to catalog, schema, table/view/SQL MV/SQL ST, column, and volume. Foreign tables and DLT-defined MV/ST are skipped because the target object does not exist.
   overwrite_tags: true
   # Optional: whether to overwrite comments during replication. default is true.
+  # Column comment replication is supported for managed/external tables, views, and SQL streaming tables. Materialized views are skipped — declare column comments in the CREATE DDL or DLT pipeline instead.
   overwrite_comments: true
+  # Optional: grant replication mode. default is false (principal-scoped overwrite:
+  # sync each source principal's privileges onto target; target-only principals
+  # untouched). Set to true for hard sync: revoke all privileges from target-only
+  # principals so target becomes an exact mirror of source (after principal_mapping).
+  overwrite_grants: false
   # uc metadata specific configurations end here: ------------------------
 
   # Data Replication specific configurations start here: ------------------------
