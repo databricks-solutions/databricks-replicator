@@ -165,15 +165,15 @@ source .venv/bin/activate
 data-replicator --help
 
 # Validate configuration without running
-data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --validate-only
-data-replicator configs/cross_metastore/all_tables_defaults.yaml --validate-only
-data-replicator configs/cross_metastore/volume_defaults.yaml --validate-only
+data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --validate-only --target-catalog catalog1
+data-replicator configs/cross_metastore/all_tables_defaults.yaml --validate-only --target-catalog catalog1
+data-replicator configs/cross_metastore/volume_defaults.yaml --validate-only --target-catalog catalog1
 
 # Replicate all uc metadata
 # Set storage_credential_config if storage credentials need to be replicated
 # Set cloud_url_mapping if external location or external table need to be replicated
 # Objects will be replicated in the following logical order: Storage credentials -> External locations -> Tag policies -> Catalogs -> Schemas -> Tables -> Views -> Volumes -> Column Tags -> Column Comments -> Permissions
-data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --uc-object-types all --target-catalogs catalog1,catalog2,catalog3
+data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --target-catalogs catalog1,catalog2,catalog3
 
 # Replicate delta tables for specific catalogs
 # DLT streaming tables must already exist in target before replicate
