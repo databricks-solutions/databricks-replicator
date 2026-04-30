@@ -275,29 +275,36 @@ class ConfigLoader:
                 ) from e
 
         # Handle concurrency override
-        if concurrency_override:
-            try:
-                # Validate concurrency value
-                if (
-                    not isinstance(concurrency_override, int)
-                    or concurrency_override < 1
-                ):
-                    raise ValidationError(
-                        "concurrency_override must be a positive integer"
-                    )
-
-                # Create concurrency config with max_workers override
-                validated_concurrency = ConcurrencyConfig(
-                    max_workers=concurrency_override
+        if concurrency_override is not None:
+            if (
+                not isinstance(concurrency_override, int)
+                or concurrency_override < 1
+            ):
+                raise ConfigurationError(
+                    "concurrency_override must be a positive integer"
                 )
-
-                # Apply override to config data
-                config_data["concurrency"] = validated_concurrency.model_dump()
-
+            try:
+                # Range/type validation against the model
+                ConcurrencyConfig(max_workers=concurrency_override)
             except ValidationError as e:
                 raise ConfigurationError(
                     f"Invalid concurrency configuration: {e}"
                 ) from e
+
+            # Apply max_workers at every level (system, catalog, schema) so the
+            # CLI override wins over YAML at any level, while preserving sibling
+            # fields (parallel_table_filter, process_schemas_in_serial,
+            # timeout_seconds) that the user may have set in YAML.
+            def _set_max_workers(holder: dict) -> None:
+                existing = holder.get("concurrency") or {}
+                existing["max_workers"] = concurrency_override
+                holder["concurrency"] = existing
+
+            _set_max_workers(config_data)
+            for catalog in config_data.get("target_catalogs") or []:
+                _set_max_workers(catalog)
+                for schema in catalog.get("target_schemas") or []:
+                    _set_max_workers(schema)
 
         # Handle logging_level override
         if logging_level_override:
