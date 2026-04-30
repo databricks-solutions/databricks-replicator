@@ -14,6 +14,8 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.catalog import (
     CatalogInfo,
     ExternalLocationInfo,
+    PermissionsChange,
+    PrivilegeAssignment,
     SchemaInfo,
     StorageCredentialInfo,
     VolumeInfo,
@@ -1562,6 +1564,117 @@ class DatabricksOperations:
             return updated_external_location
         except Exception as e:
             raise Exception(f"Failed to update external location: {str(e)}") from e
+
+    def get_sp_display_name_by_app_id(self, application_id: str) -> Optional[str]:
+        """
+        Look up a service principal's display name by its application_id using
+        a SCIM filter query. Returns None if the workspace_client is missing,
+        the SP is not found, or the API call fails.
+        """
+        if not self.workspace_client or not application_id:
+            return None
+        try:
+            scim_filter = f"applicationId eq '{application_id}'"
+            for sp in self.workspace_client.service_principals.list(filter=scim_filter):
+                return getattr(sp, "display_name", None)
+            return None
+        except Exception:
+            return None
+
+    def get_sp_app_id_by_display_name(self, display_name: str) -> Optional[str]:
+        """
+        Look up a service principal's application_id by its display name using
+        a SCIM filter query. Returns None if the workspace_client is missing,
+        the SP is not found, or the API call fails.
+        """
+        if not self.workspace_client or not display_name:
+            return None
+        try:
+            scim_filter = f"displayName eq '{display_name}'"
+            for sp in self.workspace_client.service_principals.list(filter=scim_filter):
+                return getattr(sp, "application_id", None)
+            return None
+        except Exception:
+            return None
+
+    def get_grants(
+        self, securable_type: str, full_name: str
+    ) -> List[PrivilegeAssignment]:
+        """
+        Get all direct (non-inherited) grants on a UC securable, walking the
+        grants.get pagination token until exhausted.
+
+        Args:
+            securable_type: Value of SecurableType enum (e.g. "CATALOG",
+                "SCHEMA", "TABLE", "VOLUME").
+            full_name: Fully qualified name of the securable (e.g. "cat",
+                "cat.sch", "cat.sch.tbl").
+
+        Returns:
+            List of PrivilegeAssignment across all pages; empty list if the
+            securable has no direct grants.
+
+        Raises:
+            Exception: If getting grants fails or workspace_client is None.
+        """
+        if not self.workspace_client:
+            raise Exception("WorkspaceClient is required for grant operations")
+
+        assignments: List[PrivilegeAssignment] = []
+        page_token: Optional[str] = None
+        seen_tokens: set = set()
+        try:
+            while True:
+                response = self.workspace_client.grants.get(
+                    securable_type=securable_type,
+                    full_name=full_name,
+                    page_token=page_token,
+                )
+                assignments.extend(response.privilege_assignments or [])
+                next_token = getattr(response, "next_page_token", None)
+                if not next_token or next_token == page_token or next_token in seen_tokens:
+                    break
+                seen_tokens.add(next_token)
+                page_token = next_token
+            return assignments
+        except Exception as e:
+            raise Exception(
+                f"Failed to get grants for {securable_type} {full_name}: {str(e)}"
+            ) from e
+
+    def update_grants(
+        self,
+        securable_type: str,
+        full_name: str,
+        changes: List[PermissionsChange],
+    ) -> None:
+        """
+        Apply a list of grant changes (add/remove per principal) to a UC
+        securable.
+
+        Args:
+            securable_type: Value of SecurableType enum.
+            full_name: Fully qualified name of the securable.
+            changes: List of PermissionsChange objects; a no-op call with an
+                empty list is a WorkspaceClient SDK error, so callers should
+                early-return instead.
+
+        Raises:
+            Exception: If updating grants fails or workspace_client is None.
+        """
+        if not self.workspace_client:
+            raise Exception("WorkspaceClient is required for grant operations")
+
+        try:
+            self.workspace_client.grants.update(
+                securable_type=securable_type,
+                full_name=full_name,
+                changes=changes,
+            )
+        except Exception as e:
+            raise Exception(
+                f"Failed to update grants for {securable_type} {full_name}: {str(e)}"
+            ) from e
 
     def list_tag_policies(self) -> List[TagPolicy]:
         """

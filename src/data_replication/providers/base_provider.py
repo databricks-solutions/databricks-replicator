@@ -13,10 +13,15 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import List, Optional
 import random
+import re
 
 from databricks.connect import DatabricksSession
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.catalog import EnablePredictiveOptimization
+from databricks.sdk.service.catalog import (
+    EnablePredictiveOptimization,
+    PermissionsChange,
+    Privilege,
+)
 
 from pyspark.sql.utils import AnalysisException
 
@@ -75,6 +80,7 @@ class BaseProvider(ABC):
         cloud_url_mapping: Optional[dict] = None,
         audit_logger: Optional[AuditLogger] = None,
         completed_run_results: Optional[List[RunResult]] = None,
+        principal_mapping: Optional[dict] = None,
     ):
         """
         Initialize the base provider.
@@ -99,6 +105,7 @@ class BaseProvider(ABC):
         self.max_workers = self.catalog_config.concurrency.max_workers
         self.timeout_seconds = self.catalog_config.concurrency.timeout_seconds
         self.cloud_url_mapping = cloud_url_mapping
+        self.principal_mapping = principal_mapping
         self.audit_logger = audit_logger
         self.catalog_name: Optional[str] = None
         self.source_spark = None
@@ -113,6 +120,12 @@ class BaseProvider(ABC):
             for result in completed_run_results or []
         ]
         self.shared_tables: List[str] = []
+        # Per-principal SP resolution caches (populated lazily by _map_principal).
+        # _sp_src_app_id_to_name: source application_id -> source display_name
+        # _sp_tgt_name_to_app_id: target display_name -> target application_id
+        # Both caches store None for misses to avoid repeated SDK calls.
+        self._sp_src_app_id_to_name: dict = {}
+        self._sp_tgt_name_to_app_id: dict = {}
 
     @abstractmethod
     def setup_operation_catalogs(self):
@@ -292,6 +305,22 @@ class BaseProvider(ABC):
                 if len(uc_object_types_catalog_processed) == 0:
                     return results
 
+            # Replicate catalog grants if configured
+            if self.catalog_config.uc_object_types and (
+                UCObjectType.CATALOG_GRANT in self.catalog_config.uc_object_types
+                or UCObjectType.ALL in self.catalog_config.uc_object_types
+            ):
+                run_result = self._uc_replicate_catalog_grants()
+                results.extend(run_result)
+                catalog_run_result = []
+                if run_result:
+                    catalog_run_result.extend(run_result)
+                    self.audit_logger.log_results(catalog_run_result)
+                if UCObjectType.ALL not in self.catalog_config.uc_object_types:
+                    uc_object_types_catalog_processed.remove(UCObjectType.CATALOG_GRANT)
+                if len(uc_object_types_catalog_processed) == 0:
+                    return results
+
             # Handle schema-table filter expression if configured or sampling is enabled
             if self.catalog_config.schema_table_filter_expression or (
                 self.catalog_config.reconciliation_config
@@ -432,6 +461,22 @@ class BaseProvider(ABC):
                     if len(uc_object_types_schema_processed) == 0:
                         continue
 
+                # Replicate schema grants if configured
+                if self.catalog_config.uc_object_types and (
+                    UCObjectType.SCHEMA_GRANT in self.catalog_config.uc_object_types
+                    or UCObjectType.ALL in self.catalog_config.uc_object_types
+                ):
+                    run_result = self._uc_replicate_schema_grants(schema_config)
+                    results.extend(run_result)
+                    schema_run_result = []
+                    if run_result:
+                        schema_run_result.extend(run_result)
+                        self.audit_logger.log_results(schema_run_result)
+                    if UCObjectType.ALL not in self.catalog_config.uc_object_types:
+                        uc_object_types_schema_processed.remove(UCObjectType.SCHEMA_GRANT)
+                    if len(uc_object_types_schema_processed) == 0:
+                        continue
+
                 # Process all tables and volumes in the schema
                 schema_results = []
                 schema_tables = []
@@ -565,6 +610,7 @@ class BaseProvider(ABC):
                         t in self.catalog_config.uc_object_types
                         for t in [
                             UCObjectType.TABLE_TAG,
+                            UCObjectType.TABLE_GRANT,
                             UCObjectType.ALL,
                             UCObjectType.COLUMN_TAG,
                             UCObjectType.COLUMN_COMMENT,
@@ -585,6 +631,7 @@ class BaseProvider(ABC):
                         t in self.catalog_config.uc_object_types
                         for t in [
                             UCObjectType.VOLUME_TAG,
+                            UCObjectType.VOLUME_GRANT,
                             UCObjectType.VOLUME,
                             UCObjectType.ALL,
                         ]
@@ -1287,6 +1334,16 @@ class BaseProvider(ABC):
                     table_types_set.update(["materialized_view"])
                 if UCObjectType.STREAMING_TABLE in schema_config.uc_object_types:
                     table_types_set.update(["streaming_table"])
+                # Grants and tags apply to every table kind — don't narrow the set.
+                if (
+                    UCObjectType.TABLE_GRANT in schema_config.uc_object_types
+                    or UCObjectType.TABLE_TAG in schema_config.uc_object_types
+                    or UCObjectType.COLUMN_TAG in schema_config.uc_object_types
+                    or UCObjectType.COLUMN_COMMENT in schema_config.uc_object_types
+                ):
+                    table_types_set.update(
+                        ["managed", "external", "view", "materialized_view", "streaming_table"]
+                    )
                 if table_types_set:
                     table_types = list(table_types_set)
 
@@ -1351,6 +1408,7 @@ class BaseProvider(ABC):
         if schema_config.uc_object_types and (
             UCObjectType.VOLUME in schema_config.uc_object_types
             or UCObjectType.VOLUME_TAG in schema_config.uc_object_types
+            or UCObjectType.VOLUME_GRANT in schema_config.uc_object_types
             or UCObjectType.ALL in schema_config.uc_object_types
         ):
             volume_types.extend(["managed", "external"])
@@ -1779,6 +1837,593 @@ class BaseProvider(ABC):
 
         run_results.append(run_result)
         return run_results
+
+    @staticmethod
+    def _looks_like_sp_uuid(s: Optional[str]) -> bool:
+        # application_id is a lowercase UUID; users/groups are emails or names
+        if not s or "@" in s or len(s) != 36:
+            return False
+        return bool(re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", s))
+
+    def _resolve_source_sp_name(self, app_id: str) -> Optional[str]:
+        """Look up (and cache) the source SP display name for a given app_id."""
+        if app_id in self._sp_src_app_id_to_name:
+            return self._sp_src_app_id_to_name[app_id]
+        name = None
+        if self.source_dbops is not None:
+            try:
+                name = self.source_dbops.get_sp_display_name_by_app_id(app_id)
+            except Exception:
+                name = None
+        self._sp_src_app_id_to_name[app_id] = name
+        return name
+
+    def _resolve_target_sp_app_id(self, display_name: str) -> Optional[str]:
+        """Look up (and cache) the target SP application_id for a given display name."""
+        if display_name in self._sp_tgt_name_to_app_id:
+            return self._sp_tgt_name_to_app_id[display_name]
+        app_id = None
+        if self.target_dbops is not None:
+            try:
+                app_id = self.target_dbops.get_sp_app_id_by_display_name(display_name)
+            except Exception:
+                app_id = None
+        self._sp_tgt_name_to_app_id[display_name] = app_id
+        return app_id
+
+    def _map_principal(self, principal: Optional[str]) -> Optional[str]:
+        """
+        Map a source principal string to a target principal string.
+
+        Lookup order:
+          1. Exact key match in ``principal_mapping`` (user email, group name,
+             or SP application_id UUID). If the mapped value looks like an SP
+             display name, resolve it to the target application_id.
+          2. If the source principal is an SP application_id UUID, resolve it
+             to its display name on the source workspace. Then:
+               a. if that name is in the mapping, use the mapped value; if
+                  the mapped value is a display name, resolve to target UUID.
+               b. otherwise assume the target SP uses the same display name
+                  and resolve it to a target UUID.
+          3. Fall through verbatim.
+
+        SP lookups are targeted (SCIM filter by application_id or display
+        name) and results are cached per principal, so users/groups never hit
+        the SP API.
+        """
+        if principal is None:
+            return None
+        mapping = self.principal_mapping or {}
+
+        def _resolve_mapped(value: Optional[str]) -> Optional[str]:
+            # Values that are already UUIDs are used verbatim. Anything else
+            # (display name, email-style SP name, group name, or real user
+            # email) is attempted as a target SP display name; if the SCIM
+            # lookup misses, fall back to the value verbatim so real users
+            # and groups still work.
+            if not value or self._looks_like_sp_uuid(value):
+                return value
+            tgt_uuid = self._resolve_target_sp_app_id(value)
+            return tgt_uuid or value
+
+        # Step 1: exact match — users/groups and explicit UUID->UUID
+        if principal in mapping:
+            return _resolve_mapped(mapping[principal])
+
+        # Step 2: source principal is an SP UUID — resolve its display name
+        if self._looks_like_sp_uuid(principal):
+            src_name = self._resolve_source_sp_name(principal)
+            if src_name:
+                if src_name in mapping:
+                    return _resolve_mapped(mapping[src_name])
+                # No explicit mapping — assume the target SP shares the name.
+                tgt_uuid = self._resolve_target_sp_app_id(src_name)
+                if tgt_uuid:
+                    return tgt_uuid
+
+        # Step 3: verbatim
+        return principal
+
+    def _diff_privileges_per_principal(
+        self,
+        source_assignments: List,
+        target_assignments: List,
+        overwrite_grants: bool = False,
+    ) -> tuple:
+        """
+        Build per-principal add/remove PermissionsChange entries from source
+        and target PrivilegeAssignment lists.
+
+        Returns a tuple ``(changes, skipped)`` where ``skipped`` is a list of
+        ``{"principal", "reason"}`` dicts for source principals that could not
+        be resolved to a target principal and were therefore excluded from
+        ``changes``.
+
+        Default (overwrite_grants=False, principal-scoped overwrite):
+          - for each source principal, the target's privileges for that
+            principal become exactly source's — add missing, remove extras
+          - target-only principals are left alone
+
+        Hard sync (overwrite_grants=True):
+          - same as above, AND
+          - any principal present on target but not on source (after
+            principal_mapping) gets a remove-all change so target becomes an
+            exact mirror
+
+        Source principals are passed through principal_mapping first.
+        """
+        skipped: list = []
+        # source_by_principal maps mapped-principal -> set(privilege values)
+        source_by_principal: dict = {}
+        for pa in source_assignments or []:
+            raw = getattr(pa, "principal", None)
+            mapped = self._map_principal(raw)
+            if not mapped:
+                continue
+            # If the source principal is an SP UUID and the result is the
+            # same verbatim UUID, we failed to resolve it to a known target
+            # principal. Including it would be rejected by the UC API; skip
+            # with a warning so the rest of the grants can still apply.
+            if (
+                mapped == raw
+                and self._looks_like_sp_uuid(raw)
+                and raw not in (self.principal_mapping or {})
+            ):
+                src_name = self._sp_src_app_id_to_name.get(raw)
+                reason = (
+                    f"source SP {raw}"
+                    + (f" (display_name={src_name!r})" if src_name else " (source display_name unresolved)")
+                    + " has no matching principal on target; add an entry to principal_mapping to map it"
+                )
+                skipped.append({"principal": raw, "reason": reason})
+                if self.logger:
+                    self.logger.warning(
+                        f"Skipping source SP {raw}: no matching principal on "
+                        "target (add an entry to principal_mapping to map it)"
+                    )
+                continue
+            privs = {
+                getattr(p, "value", p) for p in (getattr(pa, "privileges", None) or [])
+            }
+            source_by_principal.setdefault(mapped, set()).update(privs)
+
+        target_by_principal: dict = {}
+        for pa in target_assignments or []:
+            principal = getattr(pa, "principal", None)
+            if not principal:
+                continue
+            privs = {
+                getattr(p, "value", p) for p in (getattr(pa, "privileges", None) or [])
+            }
+            target_by_principal.setdefault(principal, set()).update(privs)
+
+        def _to_privileges(names):
+            out = []
+            for n in names:
+                try:
+                    out.append(Privilege(n))
+                except ValueError:
+                    self.logger.warning(
+                        f"Skipping unknown privilege {n!r} not in Privilege enum"
+                    )
+            return out
+
+        changes: List[PermissionsChange] = []
+        for principal, source_privs in source_by_principal.items():
+            target_privs = target_by_principal.get(principal, set())
+            to_add = source_privs - target_privs
+            to_remove = target_privs - source_privs
+            if not to_add and not to_remove:
+                continue
+            changes.append(
+                PermissionsChange(
+                    principal=principal,
+                    add=_to_privileges(sorted(to_add)) or None,
+                    remove=_to_privileges(sorted(to_remove)) or None,
+                )
+            )
+
+        if overwrite_grants:
+            for principal, target_privs in target_by_principal.items():
+                if principal in source_by_principal or not target_privs:
+                    continue
+                changes.append(
+                    PermissionsChange(
+                        principal=principal,
+                        add=None,
+                        remove=_to_privileges(sorted(target_privs)),
+                    )
+                )
+        return changes, skipped
+
+    def _replicate_grants(
+        self,
+        object_type: str,
+        securable_type: str,
+        source_full_name: str,
+        target_full_name: str,
+        target_catalog: str,
+        schema_name: Optional[str] = None,
+        object_name: Optional[str] = None,
+        retry: Optional[RetryConfig] = None,
+        overwrite_grants: bool = False,
+    ) -> RunResult:
+        """
+        Replicate principal-scoped grants from a source securable to a target
+        securable. Target principals not present on source are left alone.
+        Source principals are remapped via system.principal_mapping.
+        """
+        start_time = datetime.now(timezone.utc)
+        attempt = 1
+        max_attempts = retry.max_attempts if retry else 1
+        last_exception: Optional[Exception] = None
+
+        try:
+            self.logger.info(
+                f"Starting {object_type} replication: {source_full_name} -> {target_full_name}",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
+
+            self.logger.info(
+                f"Fetching source grants: {securable_type} {source_full_name}",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
+            source_assignments = self.source_dbops.get_grants(
+                securable_type, source_full_name
+            )
+            self.logger.info(
+                f"Fetched {len(source_assignments)} source grants; fetching target grants: "
+                f"{securable_type} {target_full_name}",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
+            target_assignments = self.target_dbops.get_grants(
+                securable_type, target_full_name
+            )
+            self.logger.info(
+                f"Fetched {len(target_assignments)} target grants",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
+
+            changes, skipped_principals = self._diff_privileges_per_principal(
+                source_assignments,
+                target_assignments,
+                overwrite_grants=overwrite_grants,
+            )
+
+            end_time = datetime.now(timezone.utc)
+            if not changes:
+                duration = (end_time - start_time).total_seconds()
+                if skipped_principals:
+                    error_msg = (
+                        f"{object_type} replication failed: "
+                        f"{source_full_name} -> {target_full_name} | "
+                        f"{len(skipped_principals)} principal(s) skipped, "
+                        "no applicable changes"
+                    )
+                    self.logger.error(
+                        error_msg,
+                        extra={"run_id": self.run_id, "operation": "uc_replication"},
+                    )
+                    return RunResult(
+                        operation_type="uc_replication",
+                        catalog_name=target_catalog,
+                        schema_name=schema_name,
+                        object_name=object_name or target_catalog,
+                        object_type=object_type,
+                        status="failed",
+                        start_time=start_time.isoformat(),
+                        end_time=end_time.isoformat(),
+                        duration_seconds=duration,
+                        error_message=(
+                            f"{len(skipped_principals)} unresolvable principal(s) skipped"
+                        ),
+                        details={
+                            "source_object": source_full_name,
+                            "target_object": target_full_name,
+                            "principals_synced": 0,
+                            "principals_skipped": len(skipped_principals),
+                            "skipped_principals": skipped_principals,
+                            "overwrite_grants": overwrite_grants,
+                        },
+                        attempt_number=attempt,
+                        max_attempts=max_attempts,
+                    )
+                self.logger.info(
+                    f"No grant changes needed: {source_full_name} -> {target_full_name}",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                return RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    object_name=object_name or target_catalog,
+                    object_type=object_type,
+                    status="success",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    details={
+                        "source_object": source_full_name,
+                        "target_object": target_full_name,
+                        "principals_synced": 0,
+                        "overwrite_grants": overwrite_grants,
+                        "skipped": True,
+                    },
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+
+            # Apply changes with configured retry. On batch failure we fall
+            # back to per-principal apply so valid principals still land and
+            # only bad principals (missing / mistyped / wrong cloud UUID) are
+            # reported, instead of one bad principal rejecting the whole
+            # object's grant sync.
+            @retry_with_logging(retry, self.logger)
+            def _apply_batch():
+                self.target_dbops.update_grants(
+                    securable_type=securable_type,
+                    full_name=target_full_name,
+                    changes=changes,
+                )
+                return True
+
+            batch_ok, batch_exc, attempt, max_attempts = _apply_batch()
+            per_principal_failures: list = []
+
+            if not batch_ok:
+                self.logger.warning(
+                    f"Batch grant apply failed for {target_full_name} "
+                    f"({str(batch_exc) if batch_exc else 'unknown'}); "
+                    f"retrying per principal",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                for change in changes:
+                    try:
+                        self.target_dbops.update_grants(
+                            securable_type=securable_type,
+                            full_name=target_full_name,
+                            changes=[change],
+                        )
+                    except Exception as pe:
+                        per_principal_failures.append(
+                            {
+                                "principal": getattr(change, "principal", None),
+                                "error": str(pe),
+                            }
+                        )
+                        self.logger.warning(
+                            f"Per-principal grant apply failed for "
+                            f"{getattr(change, 'principal', None)} on "
+                            f"{target_full_name}: {str(pe)}",
+                            extra={"run_id": self.run_id, "operation": "uc_replication"},
+                        )
+
+            end_time = datetime.now(timezone.utc)
+            duration = (end_time - start_time).total_seconds()
+
+            total = len(changes)
+            failed_count = len(per_principal_failures)
+            applied = total - failed_count
+            fully_ok = batch_ok or failed_count == 0
+            partially_ok = (not batch_ok) and failed_count > 0 and applied > 0
+
+            skipped_count = len(skipped_principals)
+
+            if fully_ok:
+                # Any unresolvable (skipped) source principals downgrade the
+                # overall result to "failed" so the operator sees them in the
+                # summary and the audit log, with the offenders in details.
+                status = "failed" if skipped_count else "success"
+                if skipped_count:
+                    self.logger.error(
+                        f"{object_type} replication failed (applied {applied}/{total}; "
+                        f"{skipped_count} source principal(s) skipped): "
+                        f"{source_full_name} -> {target_full_name} ({duration:.2f}s)",
+                        extra={"run_id": self.run_id, "operation": "uc_replication"},
+                    )
+                else:
+                    self.logger.info(
+                        f"{object_type} replication completed: {source_full_name} -> {target_full_name} "
+                        f"({total} principals, {duration:.2f}s)",
+                        extra={"run_id": self.run_id, "operation": "uc_replication"},
+                    )
+                details = {
+                    "source_object": source_full_name,
+                    "target_object": target_full_name,
+                    "principals_synced": total,
+                    "overwrite_grants": overwrite_grants,
+                }
+                if skipped_count:
+                    details["principals_skipped"] = skipped_count
+                    details["skipped_principals"] = skipped_principals
+                return RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    object_name=object_name or target_catalog,
+                    object_type=object_type,
+                    status=status,
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    error_message=(
+                        f"{skipped_count} unresolvable principal(s) skipped"
+                        if skipped_count else None
+                    ),
+                    details=details,
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+
+            # Partial: some principals applied, some failed — record both.
+            if partially_ok:
+                self.logger.warning(
+                    f"{object_type} partial: {source_full_name} -> {target_full_name} "
+                    f"({applied}/{total} principals applied, {failed_count} failed, "
+                    f"{skipped_count} skipped)",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                # Any skip or per-principal failure makes the overall result
+                # failed so it surfaces in the summary + audit.
+                details = {
+                    "source_object": source_full_name,
+                    "target_object": target_full_name,
+                    "principals_synced": applied,
+                    "principals_failed": failed_count,
+                    "failed_principals": per_principal_failures,
+                    "overwrite_grants": overwrite_grants,
+                }
+                if skipped_count:
+                    details["principals_skipped"] = skipped_count
+                    details["skipped_principals"] = skipped_principals
+                return RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    object_name=object_name or target_catalog,
+                    object_type=object_type,
+                    status="failed",
+                    start_time=start_time.isoformat(),
+                    end_time=end_time.isoformat(),
+                    duration_seconds=duration,
+                    error_message=(
+                        f"{failed_count} principal(s) failed"
+                        + (f", {skipped_count} skipped" if skipped_count else "")
+                    ),
+                    details=details,
+                    attempt_number=attempt,
+                    max_attempts=max_attempts,
+                )
+
+            # All principals failed in per-principal retry — fall through to
+            # the failed path below with the batch exception.
+            last_exception = batch_exc
+
+        except Exception as e:
+            last_exception = e
+
+        end_time = datetime.now(timezone.utc)
+        duration = (end_time - start_time).total_seconds()
+        error_msg = (
+            f"{object_type} replication failed: {source_full_name} -> {target_full_name}"
+        )
+        if last_exception:
+            error_msg += f" | Last error: {str(last_exception)}"
+        self.logger.error(
+            error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+        )
+        return RunResult(
+            operation_type="uc_replication",
+            catalog_name=target_catalog,
+            schema_name=schema_name,
+            object_name=object_name or target_catalog,
+            object_type=object_type,
+            status="failed",
+            start_time=start_time.isoformat(),
+            end_time=end_time.isoformat(),
+            duration_seconds=duration,
+            error_message=str(last_exception) if last_exception else "Unknown error",
+            details={
+                "source_object": source_full_name,
+                "target_object": target_full_name,
+            },
+            attempt_number=attempt,
+            max_attempts=max_attempts,
+        )
+
+    def _uc_replicate_catalog_grants(self) -> List[RunResult]:
+        """Replicate catalog-level grants."""
+        replication_config = self.catalog_config.replication_config
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+
+        if not self.source_dbops.if_catalog_exists(
+            source_catalog
+        ) or not self.target_dbops.if_catalog_exists(target_catalog):
+            self.logger.warning(
+                f"Source or target catalog {target_catalog} does not exist. Skipping catalog grant replication."
+            )
+            return [
+                RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name="",
+                    object_name=target_catalog,
+                    object_type="catalog_grant",
+                    status="failed",
+                    start_time=datetime.now(timezone.utc).isoformat(),
+                    end_time=datetime.now(timezone.utc).isoformat(),
+                    duration_seconds=0.0,
+                    error_message=f"Source or target catalog {target_catalog} does not exist.",
+                    details={},
+                    attempt_number=1,
+                    max_attempts=self.catalog_config.retry.max_attempts,
+                )
+            ]
+
+        return [
+            self._replicate_grants(
+                object_type="catalog_grant",
+                securable_type="CATALOG",
+                source_full_name=source_catalog,
+                target_full_name=target_catalog,
+                target_catalog=target_catalog,
+                object_name=target_catalog,
+                retry=self.catalog_config.retry,
+                overwrite_grants=bool(
+                    getattr(replication_config, "overwrite_grants", False)
+                ),
+            )
+        ]
+
+    def _uc_replicate_schema_grants(
+        self, schema_config: SchemaConfig
+    ) -> List[RunResult]:
+        """Replicate schema-level grants."""
+        replication_config = schema_config.replication_config
+        schema_name = schema_config.schema_name
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+
+        if not self.source_dbops.if_schema_exists(
+            source_catalog, schema_name
+        ) or not self.target_dbops.if_schema_exists(target_catalog, schema_name):
+            self.logger.warning(
+                f"Source or target schema {target_catalog}.{schema_name} does not exist. Skipping schema grant replication."
+            )
+            return [
+                RunResult(
+                    operation_type="uc_replication",
+                    catalog_name=target_catalog,
+                    schema_name=schema_name,
+                    object_name=schema_name,
+                    object_type="schema_grant",
+                    status="failed",
+                    start_time=datetime.now(timezone.utc).isoformat(),
+                    end_time=datetime.now(timezone.utc).isoformat(),
+                    duration_seconds=0.0,
+                    error_message=f"Source or target schema {target_catalog}.{schema_name} does not exist.",
+                    details={},
+                    attempt_number=1,
+                    max_attempts=schema_config.retry.max_attempts,
+                )
+            ]
+
+        return [
+            self._replicate_grants(
+                object_type="schema_grant",
+                securable_type="SCHEMA",
+                source_full_name=f"{source_catalog}.{schema_name}",
+                target_full_name=f"{target_catalog}.{schema_name}",
+                target_catalog=target_catalog,
+                schema_name=schema_name,
+                object_name=schema_name,
+                retry=schema_config.retry,
+                overwrite_grants=bool(
+                    getattr(replication_config, "overwrite_grants", False)
+                ),
+            )
+        ]
 
     def _uc_replicate_catalog(self) -> List[RunResult]:
         """

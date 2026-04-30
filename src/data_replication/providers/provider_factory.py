@@ -234,6 +234,7 @@ class ProviderFactory:
             self.config.cloud_url_mapping,
             self.audit_logger,
             self.completed_run_results,
+            self.config.principal_mapping,
         )
 
     def create_summary(
