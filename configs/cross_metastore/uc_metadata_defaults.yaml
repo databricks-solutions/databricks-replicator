@@ -8,6 +8,8 @@ version: "1.0"
 
 replication_group: "uc_metadata"
 
+uc_object_types: ["all"]
+
 storage_credential_config:
   target_credential_type: "aws"
   mapping:

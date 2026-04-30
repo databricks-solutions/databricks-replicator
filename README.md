@@ -145,17 +145,25 @@ Replicate UC metadata
 
 1. Install the Databricks CLI from https://docs.databricks.com/dev-tools/cli/databricks-cli.html
 
-2. Setup dev env:
+2. Configure a Databricks CLI profile for the default `WorkspaceClient` authentication. This profile can be passed to the tool via `--profile <profile-name>`. If not provided, default profile is used.
+```bash
+# Create or update ~/.databrickscfg with a named profile
+databricks configure --profile my-profile --host https://<workspace-host>
+```
+See https://docs.databricks.com/dev-tools/cli/profiles.html for details.
+
+1. Setup dev env:
 ```bash
 git clone <repository-url>
 cd <repository folder>
 make setup
 source .venv/bin/activate
+pip install -e .
 ```
 
-3. Configure <a href=./configs/environments.yaml>environments.yaml</a> file with connection details
-   
-4. **START REPLICATION**
+1. Configure <a href=./configs/environments.yaml>environments.yaml</a> file with connection details
+
+2. **START REPLICATION**
 - Clone and modify sample configs in <a href=./configs>configs</a> folder. Configs with _default suffix allows you to set up replication using system generated default names and settings with minimum configuration.
 - High level replication steps are also descrbied in the sample config
 - For more comprehensive understanding of available configs, check <a href=./configs/README.yaml>README.yaml</a>
@@ -165,9 +173,9 @@ source .venv/bin/activate
 data-replicator --help
 
 # Validate configuration without running
-data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --validate-only
-data-replicator configs/cross_metastore/all_tables_defaults.yaml --validate-only
-data-replicator configs/cross_metastore/volume_defaults.yaml --validate-only
+data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --validate-only --target-catalog catalog1
+data-replicator configs/cross_metastore/all_tables_defaults.yaml --validate-only --target-catalog catalog1
+data-replicator configs/cross_metastore/volume_defaults.yaml --validate-only --target-catalog catalog1
 
 # Replicate all uc metadata
 # Set storage_credential_config if storage credentials need to be replicated
@@ -175,12 +183,16 @@ data-replicator configs/cross_metastore/volume_defaults.yaml --validate-only
 # Objects will be replicated in the following logical order: Storage credentials -> External locations -> Tag policies -> Catalogs (+ tags, grants) -> Schemas (+ tags, grants) -> Tables -> Views -> Volumes -> Table/Volume Tags -> Table/Volume Grants -> Column Tags -> Column Comments
 data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --uc-object-types all --target-catalogs catalog1,catalog2,catalog3
 
+
 # Replicate delta tables for specific catalogs
 # DLT streaming tables must already exist in target before replicate
 data-replicator configs/cross_metastore/all_tables_defaults.yaml --target-catalogs catalog1,catalog2,catalog3
 
 # Replicate volume files for specific catalogs
 data-replicator configs/cross_metastore/volume_defaults.yaml --target-catalogs catalog1,catalog2,catalog3
+
+# Use a specific Databricks CLI profile for the default WorkspaceClient authentication
+data-replicator configs/cross_metastore/uc_metadata_defaults.yaml --target-catalogs catalog1 --profile my-profile
 ```
 The solution can be flexibly configured to replicate all or selected objects and data. Some objects such as storage credentials might be created centrally with Terraform instead
 ```bash
@@ -231,7 +243,7 @@ data-replicator configs/cross_metastore/volume_defaults.yaml --target-catalogs a
 data-replicator configs/cross_metastore/volume_defaults.yaml --target-catalogs aaron_replication --target-schemas bronze_1,silver_1 --target-volumes raw
 ```
 
-5. Deploy - the tool can be deployed as Workflow Job using DAB. Check example job in <a href=./resources>resources</a> folder
+6. Deploy - the tool can be deployed as Workflow Job using DAB. Check example job in <a href=./resources>resources</a> folder
 ```bash
 databricks bundle validate
 databricks bundle deploy

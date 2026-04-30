@@ -2,7 +2,7 @@
 
 # Core dependencies
 databricks-connect==17.1.*
-databricks-sdk>=0.8.0
+databricks-sdk>=0.67.0
 
 # Configuration and validation
 pydantic>=2.0.0

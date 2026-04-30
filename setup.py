@@ -31,7 +31,7 @@ setup(
     install_requires=[
         "databricks-connect==17.1.*",
         "pydantic>=2.0.0",
-        "databricks-sdk>=0.8.0",
+        "databricks-sdk>=0.67.0",
         "setuptools",
         "wheel"
     ],

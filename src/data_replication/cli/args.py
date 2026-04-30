@@ -362,6 +362,14 @@ def setup_argument_parser():
     )
 
     parser.add_argument(
+        "--profile",
+        "-p",
+        type=str,
+        help="Databricks CLI profile name to use when creating the WorkspaceClient. "
+             "If not specified, default authentication is used.",
+    )
+
+    parser.add_argument(
         "--env-path",
         type=str,
         help="Path to environments.yaml file. If not specified, searches in config directory and parent directories.",

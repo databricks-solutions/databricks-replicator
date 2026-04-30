@@ -263,7 +263,8 @@ def main():
         if args.run_id:
             run_id = args.run_id
 
-        w = WorkspaceClient()
+        profile = getattr(args, "profile", None)
+        w = WorkspaceClient(profile=profile) if profile else WorkspaceClient()
         default_user = w.current_user.me().user_name
         if not EXECUTED_IN_WORKSPACE:
             logger.info("Running from external non-Databricks environment")
