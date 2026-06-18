@@ -39,6 +39,7 @@ from ..databricks_operations import DatabricksOperations
 from ..utils import (
     create_workspace_client,
     map_cloud_url,
+    unwrap_retry_error,
 )
 
 if TYPE_CHECKING:
@@ -1230,7 +1231,7 @@ class ProviderFactory:
                 )
 
             except Exception as e:
-                error_msg = f"{operation_name.title()} failed for catalog {catalog.catalog_name}: {str(e)}"
+                error_msg = f"{operation_name.title()} failed for catalog {catalog.catalog_name}: {unwrap_retry_error(e)}"
                 self.logger.error(error_msg)
 
                 # Create failure result
