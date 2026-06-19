@@ -91,6 +91,14 @@ def create_spark_session(
         workspace_client=workspace_client,
         auth_type=auth_type,
     )
+    if cluster_id:
+        # When a cluster is explicitly configured, connect to it directly and do
+        # NOT fall back to serverless. Serverless is unavailable in some regions
+        # (e.g. Azure China); falling back there both fails and masks the real
+        # error behind a generic serverless connection exception.
+        return DatabricksSession.builder.remote(
+            host=host, cluster_id=cluster_id
+        ).getOrCreate()
     try:
         # Create Databricks session with default compute
         spark = DatabricksSession.builder.remote(host=host).getOrCreate()
