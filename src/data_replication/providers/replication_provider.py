@@ -1095,9 +1095,15 @@ class ReplicationProvider(BaseProvider):
         replication_operation,
         replication_config,
     ) -> tuple:
-        """Replicate table via intermediate catalog."""
+        """Replicate table via intermediate catalog.
+
+        Step 1 deep clones the source into the intermediate table; step 2 deep
+        clones the intermediate table (not the source) into the target, so the
+        source is read once and the target is built from the retained copy.
+        """
         intermediate_table = (
-            f"{replication_config.intermediate_catalog}.{schema_name}.{table_name}"
+            f"`{replication_config.intermediate_catalog}`"
+            f".`{schema_name}`.`{table_name}`"
         )
 
         # Step 1: Deep clone to intermediate
@@ -1118,9 +1124,13 @@ class ReplicationProvider(BaseProvider):
                 None,
             )
 
-        # Use deep clone
+        # Step 2: Deep clone intermediate to target
         step2_query = self._build_deep_clone_query(
-            source_table, target_table, pipeline_id, parent_table_id, replication_config
+            intermediate_table,
+            target_table,
+            pipeline_id,
+            parent_table_id,
+            replication_config,
         )
 
         return (
