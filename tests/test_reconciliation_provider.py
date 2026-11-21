@@ -353,12 +353,6 @@ class TestReconcileTable:
             assert p.process_table(_schema(), _table()) == []
         p.audit_logger.log_results.assert_not_called()
 
-    @pytest.mark.xfail(
-        reason="bug: _get_filtered_table_reference reads the catalog-level "
-        "reconciliation_config, so table-level filters and {{table_name}} "
-        "substitution never reach the SQL (docs: table level takes precedence)",
-        strict=True,
-    )
     def test_table_level_filter_with_substitution_is_applied(self):
         spark = FakeSpark()
         p = _provider(spark)

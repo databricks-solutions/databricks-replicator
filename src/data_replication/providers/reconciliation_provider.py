@@ -80,9 +80,16 @@ class ReconciliationProvider(BaseProvider):
             and self.catalog_config.reconciliation_config.enabled
         )
 
-    def _get_filtered_table_reference(self, table_name: str, is_source: bool) -> str:
-        """Get table reference with optional filter applied."""
-        reconciliation_config = self.catalog_config.reconciliation_config
+    def _get_filtered_table_reference(
+        self, table_name: str, is_source: bool, reconciliation_config=None
+    ) -> str:
+        """Get table reference with optional filter applied.
+
+        Uses the effective (table-level, substituted) reconciliation_config when
+        given, falling back to the catalog-level config.
+        """
+        if reconciliation_config is None:
+            reconciliation_config = self.catalog_config.reconciliation_config
 
         if is_source and reconciliation_config.source_filter_expression:
             return f"(SELECT * FROM {table_name} WHERE {reconciliation_config.source_filter_expression})"
@@ -693,8 +700,12 @@ class ReconciliationProvider(BaseProvider):
         """Perform row count comparison between source and target tables."""
         try:
             # Get filtered table references
-            source_table_ref = self._get_filtered_table_reference(source_table, True)
-            target_table_ref = self._get_filtered_table_reference(target_table, False)
+            source_table_ref = self._get_filtered_table_reference(
+                source_table, True, reconciliation_config
+            )
+            target_table_ref = self._get_filtered_table_reference(
+                target_table, False, reconciliation_config
+            )
 
             # Get row counts directly without creating a table
             row_count_query = f"""
@@ -793,8 +804,12 @@ class ReconciliationProvider(BaseProvider):
                 }
 
             # Get filtered table references
-            source_table_ref = self._get_filtered_table_reference(source_table, True)
-            target_table_ref = self._get_filtered_table_reference(target_table, False)
+            source_table_ref = self._get_filtered_table_reference(
+                source_table, True, reconciliation_config
+            )
+            target_table_ref = self._get_filtered_table_reference(
+                target_table, False, reconciliation_config
+            )
 
             # Create a hash-based comparison for data content and insert only mismatched records
             field_list = "`" + "`,`".join(common_fields) + "`"
