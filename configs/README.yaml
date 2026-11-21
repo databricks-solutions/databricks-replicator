@@ -302,10 +302,7 @@ concurrency:
   max_workers: 8
   # Optional: no of parallel threads for table filtering in a schema. default is 8.
   parallel_table_filter: 8
-  # Optional: per-object timeout in seconds (each table/volume), measured from when the object starts running. default is 1800.
-  # An object that runs longer is recorded as failed (Timeout) and the run moves on; queued objects are not delayed by it.
-  # The timed-out work cannot be killed and keeps running in the background until it finishes. Set this above your longest
-  # deep clone / volume copy (for volumes, at least streaming_timeout_seconds).
+  # Optional: timeout for each thread. default is 1800.
   timeout_seconds: 1800
 
 # Optional: Retry settings at replication group level
