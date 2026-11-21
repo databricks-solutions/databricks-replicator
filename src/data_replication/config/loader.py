@@ -167,7 +167,7 @@ class ConfigLoader:
                 # Validate catalog name format (alphanumeric, dashes, and underscores)
                 for catalog_name in catalog_names:
                     if not catalog_name.replace("_", "").replace("-", "").isalnum():
-                        raise ValidationError(
+                        raise ConfigurationError(
                             f"Invalid catalog name '{catalog_name}': "
                             "catalog names can only contain alphanumeric characters, "
                             "dashes, and underscores"
@@ -234,7 +234,7 @@ class ConfigLoader:
                 # Validate schema names format (alphanumeric and underscores only)
                 for schema_name in schema_names:
                     if not schema_name.replace("_", "").replace("-", "").isalnum():
-                        raise ValidationError(
+                        raise ConfigurationError(
                             f"Invalid schema name '{schema_name}': "
                             "schema names can only contain alphanumeric characters, dashes, and underscores"
                         )
@@ -309,7 +309,7 @@ class ConfigLoader:
                 # Validate logging level value
                 valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
                 if logging_level_override.upper() not in valid_levels:
-                    raise ValidationError(
+                    raise ConfigurationError(
                         f"Invalid logging level '{logging_level_override}'. "
                         f"Must be one of {valid_levels}"
                     )
@@ -338,7 +338,7 @@ class ConfigLoader:
             try:
                 # Validate URL format
                 if not source_host_override.startswith(("https://", "http://")):
-                    raise ValidationError(
+                    raise ConfigurationError(
                         f"Invalid source host URL '{source_host_override}': "
                         "must start with https:// or http://"
                     )
@@ -349,7 +349,7 @@ class ConfigLoader:
                         source_host_override
                     )
                 else:
-                    raise ValidationError(
+                    raise ConfigurationError(
                         "Cannot override source host: source_databricks_connect_config not found in config"
                     )
 
@@ -363,7 +363,7 @@ class ConfigLoader:
             try:
                 # Validate URL format
                 if not target_host_override.startswith(("https://", "http://")):
-                    raise ValidationError(
+                    raise ConfigurationError(
                         f"Invalid target host URL '{target_host_override}': "
                         "must start with https:// or http://"
                     )
@@ -374,7 +374,7 @@ class ConfigLoader:
                         target_host_override
                     )
                 else:
-                    raise ValidationError(
+                    raise ConfigurationError(
                         "Cannot override target host: target_databricks_connect_config not found in config"
                     )
 
