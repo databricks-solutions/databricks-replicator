@@ -16,9 +16,9 @@ from ..utils import (
     create_spark_session,
     create_workspace_client,
     get_workspace_url_from_host,
+    recursive_substitute,
     retry_with_logging,
     validate_spark_session,
-    recursive_substitute,
 )
 from .base_provider import BaseProvider
 
