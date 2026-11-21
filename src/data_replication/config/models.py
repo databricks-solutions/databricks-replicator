@@ -7,7 +7,7 @@ the YAML configuration file for the data replication system.
 
 from copy import deepcopy
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from data_replication.utils import merge_models_recursive, recursive_substitute
@@ -263,6 +263,14 @@ class ReplicationConfig(BaseModel):
     create_or_replace_view: Optional[bool] = True
     create_or_replace_materialized_view: Optional[bool] = True
     create_or_replace_streaming_table: Optional[bool] = False
+    catalog_reference_mapping: Optional[Dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Extra source -> target catalog mappings applied to fully qualified "
+            "references in replayed view / materialized view / streaming table "
+            "bodies. source_catalog -> catalog_name is always applied."
+        ),
+    )
     overwrite_tags: Optional[bool] = True
     overwrite_comments: Optional[bool] = True
     overwrite_grants: Optional[bool] = False
