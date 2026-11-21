@@ -987,6 +987,78 @@ class DatabricksOperations:
             # Schema might not exist or be accessible
             return []
 
+    @staticmethod
+    def _sql_literal(value: str) -> str:
+        return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+    def get_functions_in_schema(self, catalog_name: str, schema_name: str) -> List[str]:
+        """
+        Get names of all user-defined functions in a schema from
+        information_schema.routines.
+
+        Raises:
+            Exception: if the query fails (callers decide how to report it).
+        """
+        df = self._execute_sql(
+            f"""
+            SELECT routine_name
+            FROM `{catalog_name}`.information_schema.routines
+            WHERE routine_schema = {self._sql_literal(schema_name)}
+            ORDER BY routine_name
+            """,
+            "list functions",
+        )
+        return [row["routine_name"] for row in df.collect()]
+
+    def get_function_metadata(
+        self, catalog_name: str, schema_name: str, function_name: str
+    ) -> Optional[dict]:
+        """
+        Fetch everything needed to rebuild a function's CREATE DDL.
+
+        Returns:
+            dict with keys ``routine`` (routines row), ``parameters``
+            (parameters rows) and ``result_columns`` (routine_columns rows,
+            table-valued functions only), each as plain dicts; or None if the
+            function is not found.
+        """
+        info_schema = f"`{catalog_name}`.information_schema"
+        where = (
+            f"specific_schema = {self._sql_literal(schema_name)} "
+            f"AND specific_name = {self._sql_literal(function_name)}"
+        )
+        routines = self._execute_sql(
+            f"SELECT * FROM {info_schema}.routines WHERE "
+            f"routine_schema = {self._sql_literal(schema_name)} "
+            f"AND routine_name = {self._sql_literal(function_name)}",
+            "get function routine",
+        ).collect()
+        if not routines:
+            return None
+        parameters = self._execute_sql(
+            f"SELECT * FROM {info_schema}.parameters WHERE {where} "
+            "ORDER BY ordinal_position",
+            "get function parameters",
+        ).collect()
+        result_columns = self._execute_sql(
+            f"SELECT * FROM {info_schema}.routine_columns WHERE {where} "
+            "ORDER BY ordinal_position",
+            "get function result columns",
+        ).collect()
+        return {
+            "routine": routines[0].asDict(),
+            "parameters": [row.asDict() for row in parameters],
+            "result_columns": [row.asDict() for row in result_columns],
+        }
+
+    def if_function_exists(self, function_name: str) -> bool:
+        """Check if a function exists (function_name: catalog.schema.function)."""
+        try:
+            self.spark.sql(f"DESCRIBE FUNCTION {function_name}")
+            return True
+        except Exception:
+            return False
+
     def filter_volumes_by_type(
         self,
         catalog_name: str,

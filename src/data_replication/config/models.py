@@ -93,6 +93,8 @@ class UCObjectType(str, Enum):
     SCHEMA_GRANT = "schema_grant"
     TABLE_GRANT = "table_grant"
     VOLUME_GRANT = "volume_grant"
+    FUNCTION = "function"
+    FUNCTION_GRANT = "function_grant"
     MATERIALIZED_VIEW = "materialized_view"
     STREAMING_TABLE = "streaming_table"
     ALL = "all"
@@ -263,6 +265,7 @@ class ReplicationConfig(BaseModel):
     create_or_replace_view: Optional[bool] = True
     create_or_replace_materialized_view: Optional[bool] = True
     create_or_replace_streaming_table: Optional[bool] = False
+    create_or_replace_function: Optional[bool] = True
     overwrite_tags: Optional[bool] = True
     overwrite_comments: Optional[bool] = True
     overwrite_grants: Optional[bool] = False

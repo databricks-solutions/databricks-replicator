@@ -15,6 +15,10 @@ from databricks.sdk.service.sql import StatementState
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
 from databricks.sdk.service.catalog import VolumeType
 from data_replication.databricks_operations import DatabricksOperations
+from data_replication.function_ddl import (
+    UnsupportedFunctionError,
+    build_create_function_ddl,
+)
 
 # from delta.tables import DeltaTable
 from ..config.models import (
@@ -3199,3 +3203,228 @@ class ReplicationProvider(BaseProvider):
         ) = replication_operation(step1_query)
 
         return result, last_exception, attempt, max_attempts, step1_query
+
+    def _function_run_result(
+        self,
+        schema_name: str,
+        object_name: str,
+        object_type: str,
+        status: str,
+        start_time: datetime,
+        details: dict,
+        max_attempts: int,
+        error_message: str = None,
+        attempt: int = 1,
+    ) -> RunResult:
+        end_time = datetime.now(timezone.utc)
+        return RunResult(
+            operation_type="uc_replication",
+            catalog_name=self.catalog_config.catalog_name,
+            schema_name=schema_name,
+            object_name=object_name,
+            object_type=object_type,
+            status=status,
+            start_time=start_time.isoformat(),
+            end_time=end_time.isoformat(),
+            duration_seconds=(end_time - start_time).total_seconds(),
+            error_message=error_message,
+            details=details,
+            attempt_number=attempt,
+            max_attempts=max_attempts,
+        )
+
+    def _list_source_functions(
+        self, schema_config: SchemaConfig, object_type: str
+    ) -> tuple:
+        """List functions in the source schema.
+
+        Returns (function_names, failed_results); failed_results holds one
+        failed RunResult when listing fails, else it is empty.
+        """
+        start_time = datetime.now(timezone.utc)
+        schema_name = schema_config.schema_name
+        source_catalog = schema_config.replication_config.source_catalog
+        try:
+            return (
+                self.source_dbops.get_functions_in_schema(source_catalog, schema_name),
+                [],
+            )
+        except Exception as e:
+            error_msg = (
+                f"Failed to list functions in {source_catalog}.{schema_name}: {str(e)}"
+            )
+            self.logger.error(
+                error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+            )
+            return [], [
+                self._function_run_result(
+                    schema_name=schema_name,
+                    object_name=schema_name,
+                    object_type=object_type,
+                    status="failed",
+                    start_time=start_time,
+                    details={"source_schema": f"{source_catalog}.{schema_name}"},
+                    max_attempts=schema_config.retry.max_attempts,
+                    error_message=error_msg,
+                )
+            ]
+
+    def _uc_replicate_functions(self, schema_config: SchemaConfig) -> List[RunResult]:
+        """Replicate all UC functions in a schema by rebuilding their
+        CREATE FUNCTION DDL from the source information_schema."""
+        function_names, results = self._list_source_functions(schema_config, "function")
+        if function_names:
+            self.logger.info(
+                f"Replicating {len(function_names)} functions in schema "
+                f"{self.catalog_config.catalog_name}.{schema_config.schema_name}",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
+        for function_name in function_names:
+            results.append(self._uc_replicate_function(schema_config, function_name))
+        return results
+
+    def _uc_replicate_function(
+        self, schema_config: SchemaConfig, function_name: str
+    ) -> RunResult:
+        """Replicate a single UC function (SQL scalar, SQL table-valued or
+        Python UDF)."""
+        start_time = datetime.now(timezone.utc)
+        schema_name = schema_config.schema_name
+        replication_config = schema_config.replication_config
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+        source_function = f"`{source_catalog}`.`{schema_name}`.`{function_name}`"
+        target_function = f"`{target_catalog}`.`{schema_name}`.`{function_name}`"
+        max_attempts = schema_config.retry.max_attempts
+        details = {
+            "source_function": source_function,
+            "target_function": target_function,
+        }
+
+        def _result(status, error_message=None, attempt=1):
+            return self._function_run_result(
+                schema_name,
+                function_name,
+                "function",
+                status,
+                start_time,
+                details,
+                max_attempts,
+                error_message=error_message,
+                attempt=attempt,
+            )
+
+        try:
+            metadata = self.source_dbops.get_function_metadata(
+                source_catalog, schema_name, function_name
+            )
+            if metadata is None:
+                return _result(
+                    "failed", f"Source function not found: {source_function}"
+                )
+            try:
+                ddl = build_create_function_ddl(
+                    routine=metadata["routine"],
+                    parameters=metadata["parameters"],
+                    result_columns=metadata["result_columns"],
+                    target_full_name=target_function,
+                    create_or_replace=bool(
+                        getattr(replication_config, "create_or_replace_function", True)
+                    ),
+                )
+            except UnsupportedFunctionError as e:
+                self.logger.warning(
+                    f"Skipping function {source_function}: {str(e)}",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                return _result("skipped", str(e))
+            # TODO(#37): when the target catalog name differs from
+            # source_catalog, rewrite catalog references in the function body
+            # with sql_rewrite.rewrite_catalog_references once #37 lands.
+            # Until then the body is replayed verbatim.
+            details["step1_query"] = ddl
+
+            @retry_with_logging(schema_config.retry, self.logger)
+            def replication_operation(query: str):
+                self.logger.debug(
+                    f"Executing function DDL: {query}",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                self.target_spark.sql(query)
+                return True
+
+            result, last_exception, attempt, max_attempts = replication_operation(ddl)
+            if result:
+                self.logger.info(
+                    f"Function replicated: {source_function} -> {target_function}",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                return _result("success", attempt=attempt)
+            error_msg = (
+                f"Function replication failed after {max_attempts} attempts: "
+                f"{source_function} -> {target_function}"
+            )
+            if last_exception:
+                error_msg += f" | Last error: {str(last_exception)}"
+            self.logger.error(
+                error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+            )
+            return _result("failed", error_msg, attempt=attempt)
+        except Exception as e:
+            error_msg = f"Failed to replicate function {source_function}: {str(e)}"
+            self.logger.error(
+                error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+            )
+            return _result("failed", error_msg)
+
+    def _uc_replicate_function_grants(
+        self, schema_config: SchemaConfig
+    ) -> List[RunResult]:
+        """Replicate grants (e.g. EXECUTE) on all UC functions in a schema."""
+        function_names, results = self._list_source_functions(
+            schema_config, "function_grant"
+        )
+        schema_name = schema_config.schema_name
+        replication_config = schema_config.replication_config
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+        for function_name in function_names:
+            start_time = datetime.now(timezone.utc)
+            source_full = f"{source_catalog}.{schema_name}.{function_name}"
+            target_full = f"{target_catalog}.{schema_name}.{function_name}"
+            if not self.target_dbops.if_function_exists(
+                f"`{target_catalog}`.`{schema_name}`.`{function_name}`"
+            ):
+                self.logger.warning(
+                    f"Target function does not exist for function_grant replication: {target_full}",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                results.append(
+                    self._function_run_result(
+                        schema_name,
+                        function_name,
+                        "function_grant",
+                        "failed",
+                        start_time,
+                        {"source_object": source_full, "target_object": target_full},
+                        schema_config.retry.max_attempts,
+                        error_message="Target function does not exist",
+                    )
+                )
+                continue
+            results.append(
+                self._replicate_grants(
+                    object_type="function_grant",
+                    securable_type="FUNCTION",
+                    source_full_name=source_full,
+                    target_full_name=target_full,
+                    target_catalog=target_catalog,
+                    schema_name=schema_name,
+                    object_name=function_name,
+                    retry=schema_config.retry,
+                    overwrite_grants=bool(
+                        getattr(replication_config, "overwrite_grants", False)
+                    ),
+                )
+            )
+        return results

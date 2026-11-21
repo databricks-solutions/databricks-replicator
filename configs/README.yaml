@@ -91,6 +91,8 @@ uc_object_types: [
     "volume",
     "volume_tag",
     "volume_grant",
+    "function",
+    "function_grant",
     "column_tag",
     "column_comment",
     "materialized_view",
@@ -168,6 +170,9 @@ replication_config:
   # Optional: whether to create or replace streaming table during UC streaming table replication. default is false.
   # Note: ST is created from source SHOW CREATE TABLE DDL (embeds COMMENTs/DEFAULTs on initial creation). Unlike MV, column_comment replication IS supported incrementally for ST via ALTER STREAMING TABLE.
   create_or_replace_streaming_table: false
+  # Optional: whether to create or replace function during UC function replication. default is true to use create or replace function.
+  # Set to false to use create function if not exists (existing target functions are left unchanged).
+  create_or_replace_function: true
   # Optional: whether to overwrite tags during replication. default is true.
   # Tag replication applies to catalog, schema, table/view/SQL MV/SQL ST, column, and volume. Foreign tables and DLT-defined MV/ST are skipped because the target object does not exist.
   overwrite_tags: true

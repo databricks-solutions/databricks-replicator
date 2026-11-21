@@ -477,6 +477,30 @@ class BaseProvider(ABC):
                     if len(uc_object_types_schema_processed) == 0:
                         continue
 
+                # Replicate functions (and their grants) after schemas and
+                # before tables, so table DDL referencing functions (e.g.
+                # inline column masks / row filters) resolves at CREATE time.
+                for function_object_type, replicate_fn in (
+                    (UCObjectType.FUNCTION, self._uc_replicate_functions),
+                    (UCObjectType.FUNCTION_GRANT, self._uc_replicate_function_grants),
+                ):
+                    if self.catalog_config.uc_object_types and (
+                        function_object_type in self.catalog_config.uc_object_types
+                        or UCObjectType.ALL in self.catalog_config.uc_object_types
+                    ):
+                        run_result = replicate_fn(schema_config)
+                        results.extend(run_result)
+                        if run_result:
+                            self.audit_logger.log_results(list(run_result))
+                        if UCObjectType.ALL not in self.catalog_config.uc_object_types:
+                            uc_object_types_schema_processed.remove(
+                                function_object_type
+                            )
+                if len(uc_object_types_schema_processed) == 0 and (
+                    self.catalog_config.uc_object_types
+                ):
+                    continue
+
                 # Process all tables and volumes in the schema
                 schema_results = []
                 schema_tables = []
@@ -2424,6 +2448,18 @@ class BaseProvider(ABC):
                 ),
             )
         ]
+
+    def _uc_replicate_functions(self, schema_config: SchemaConfig) -> List[RunResult]:
+        """Replicate UC functions in a schema. Implemented by providers that
+        support UC metadata replication."""
+        return []
+
+    def _uc_replicate_function_grants(
+        self, schema_config: SchemaConfig
+    ) -> List[RunResult]:
+        """Replicate grants on UC functions in a schema. Implemented by
+        providers that support UC metadata replication."""
+        return []
 
     def _uc_replicate_catalog(self) -> List[RunResult]:
         """
