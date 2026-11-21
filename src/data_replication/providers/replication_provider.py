@@ -8,7 +8,7 @@ streaming tables, materialized views, and intermediate catalogs.
 import re
 from datetime import datetime, timezone
 from time import sleep
-from typing import List
+from typing import Dict, List
 
 from databricks.sdk.service.catalog import VolumeType
 from databricks.sdk.service.sql import (
@@ -37,6 +37,7 @@ from ..constants import (
     DICT_FOR_UPDATE_VOLUME,
 )
 from ..exceptions import ReplicationError, TableNotFoundError
+from ..sql_rewrite import rewrite_catalog_references
 from ..utils import (
     create_spark_session,
     create_workspace_client,
@@ -50,6 +51,11 @@ from ..utils import (
     validate_spark_session,
 )
 from .base_provider import BaseProvider
+
+
+def _escape_sql_string(value: str) -> str:
+    """Escape a value for use inside a single-quoted SQL string literal."""
+    return value.replace("\\", "\\\\").replace("'", "''")
 
 
 class ReplicationProvider(BaseProvider):
@@ -1049,7 +1055,8 @@ class ReplicationProvider(BaseProvider):
                     operation_type="replication",
                     catalog_name=target_catalog,
                     schema_name=schema_name,
-                    volume_name=volume_name,
+                    object_name=volume_name,
+                    object_type="volume",
                     status="failed",
                     start_time=start_time.isoformat(),
                     end_time=end_time.isoformat(),
@@ -1079,7 +1086,8 @@ class ReplicationProvider(BaseProvider):
                     operation_type="replication",
                     catalog_name=target_catalog,
                     schema_name=schema_name,
-                    volume_name=volume_name,
+                    object_name=volume_name,
+                    object_type="volume",
                     status="failed",
                     start_time=start_time.isoformat(),
                     end_time=end_time.isoformat(),
@@ -1102,9 +1110,15 @@ class ReplicationProvider(BaseProvider):
         replication_operation,
         replication_config,
     ) -> tuple:
-        """Replicate table via intermediate catalog."""
+        """Replicate table via intermediate catalog.
+
+        Step 1 deep clones the source into the intermediate table; step 2 deep
+        clones the intermediate table (not the source) into the target, so the
+        source is read once and the target is built from the retained copy.
+        """
         intermediate_table = (
-            f"{replication_config.intermediate_catalog}.{schema_name}.{table_name}"
+            f"`{replication_config.intermediate_catalog}`"
+            f".`{schema_name}`.`{table_name}`"
         )
 
         # Step 1: Deep clone to intermediate
@@ -1125,9 +1139,13 @@ class ReplicationProvider(BaseProvider):
                 None,
             )
 
-        # Use deep clone
+        # Step 2: Deep clone intermediate to target
         step2_query = self._build_deep_clone_query(
-            source_table, target_table, pipeline_id, parent_table_id, replication_config
+            intermediate_table,
+            target_table,
+            pipeline_id,
+            parent_table_id,
+            replication_config,
         )
 
         return (
@@ -1419,13 +1437,14 @@ class ReplicationProvider(BaseProvider):
                     return run_results
 
                 query = ""
+                escaped_comment = _escape_sql_string(source_comment)
                 if table_type.upper() == "VIEW":
                     query = f"""
-                    COMMENT ON VIEW {target_table} IS '{source_comment}'
+                    COMMENT ON VIEW {target_table} IS '{escaped_comment}'
                     """
                 if table_type.lower() in ["managed", "external"]:
                     query = f"""
-                    COMMENT ON TABLE {target_table} IS '{source_comment}'
+                    COMMENT ON TABLE {target_table} IS '{escaped_comment}'
                     """
 
                 # Execute the replication
@@ -1767,6 +1786,10 @@ class ReplicationProvider(BaseProvider):
         attempt = 1
         max_attempts = table_config.retry.max_attempts
         last_exception = None
+        # Initialised before the try so the failure path can report them even
+        # when the tag lookup itself raises.
+        column_with_tags_in_source = 0
+        column_with_tags_in_target = 0
 
         run_results = []
 
@@ -2415,11 +2438,11 @@ class ReplicationProvider(BaseProvider):
             table_type = self.source_dbops.get_table_type(source_table)
 
             comment_list = [
-                f"`{k}` COMMENT '{v}'"
+                f"`{k}` COMMENT '{_escape_sql_string(v)}'"
                 for k, v in merged_comment_maps.items()
                 if v is not None
             ]
-            comment_str = ",".join(comment_list).replace("\\", "\\\\").replace("'", "'")
+            comment_str = ",".join(comment_list)
 
             if len(comment_list) > 0:
                 if (
@@ -2597,6 +2620,9 @@ class ReplicationProvider(BaseProvider):
         # Get source table type to determine replication strategy
         source_table_type = self.db_ops.get_table_type(source_table)
 
+        # Initialised before the try so the failure path can report it even
+        # when the error happens before any replication attempt.
+        attempt = 1
         try:
             self.logger.info(
                 f"Starting replication: {source_table} -> {target_table}",
@@ -2756,6 +2782,24 @@ class ReplicationProvider(BaseProvider):
                 )
             ]
 
+    def _catalog_reference_map(self, replication_config) -> Dict[str, str]:
+        """
+        Build the source -> target catalog mapping used to rewrite fully
+        qualified references inside replayed view / MV / ST bodies.
+
+        Includes source_catalog -> target catalog_name (when they differ) plus
+        any entries from replication_config.catalog_reference_mapping.
+        """
+        mapping: Dict[str, str] = {}
+        extra = getattr(replication_config, "catalog_reference_mapping", None)
+        if extra:
+            mapping.update(extra)
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+        if source_catalog and target_catalog:
+            mapping[source_catalog] = target_catalog
+        return mapping
+
     def _uc_replicate_view(
         self,
         source_table: str,
@@ -2786,6 +2830,9 @@ class ReplicationProvider(BaseProvider):
         attempt = 1
 
         view_stmt = self.source_dbops.show_create_table_ddl(source_table)
+        view_stmt = rewrite_catalog_references(
+            view_stmt, self._catalog_reference_map(replication_config)
+        )
 
         if replication_config.create_or_replace_view:
             step1_query = view_stmt.replace(
@@ -2978,6 +3025,9 @@ class ReplicationProvider(BaseProvider):
                 )
             ]
 
+        # Initialised before the try so the failure path can report it even
+        # when the error happens before any replication attempt.
+        attempt = 1
         try:
             self.logger.info(
                 f"Starting replication: {source_table} -> {target_table} with SQL warehouse {self.target_databricks_config.warehouse_id}",
@@ -3135,6 +3185,9 @@ class ReplicationProvider(BaseProvider):
         step1_query = None
         attempt = 1
         table_stmt = self.source_dbops.show_create_table_ddl(source_table)
+        table_stmt = rewrite_catalog_references(
+            table_stmt, self._catalog_reference_map(replication_config)
+        )
 
         if replication_config.create_or_replace_materialized_view:
             step1_query = table_stmt.replace(
@@ -3183,6 +3236,9 @@ class ReplicationProvider(BaseProvider):
         step1_query = None
         attempt = 1
         table_stmt = self.source_dbops.show_create_table_ddl(source_table)
+        table_stmt = rewrite_catalog_references(
+            table_stmt, self._catalog_reference_map(replication_config)
+        )
 
         if replication_config.create_or_replace_streaming_table:
             step1_query = table_stmt.replace(

@@ -34,10 +34,8 @@ jobs:
             requirements-dev.txt
             setup.py
       - run: pip install -r requirements-dev.txt -e .
-      # pytest.ini requires 70% coverage; current coverage is ~37%.
-      # Gate at the current level so coverage can't regress, and raise this
-      # as coverage improves (tracked in #53).
-      - run: pytest --cov-fail-under=35 --cov-report=term
+      # Coverage minimum (90%) is set in pytest.ini.
+      - run: pytest --cov-report=term
 
   type-check:
     name: Type check (mypy, report only)

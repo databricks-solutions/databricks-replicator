@@ -597,7 +597,7 @@ class BaseProvider(ABC):
                 "catalog",
                 start_time,
             )
-            results.append(result)
+            results.extend(result)
 
         return results
 
@@ -1059,7 +1059,7 @@ class BaseProvider(ABC):
             return table_type_filter_expr
         return None
 
-    def _build_schema_table_filter_expression(self) -> str:
+    def _build_schema_table_filter_expression(self) -> Optional[str]:
         """construct schema_table_filter_expression from target_schemas if provided"""
         if self.catalog_config.target_schemas:
             schema_table_filters = []
@@ -1116,6 +1116,8 @@ class BaseProvider(ABC):
             schema_table_filter_expression = " and ".join(schema_names)
             return schema_table_filter_expression
 
+        # Nothing configured (e.g. reconciliation sampling alone): no filter.
+        schema_table_filter_expression = None
         if self.catalog_config.schema_table_filter_expression:
             # add table type filters to schema_table_filter_expression
             table_types = []
@@ -1211,7 +1213,9 @@ class BaseProvider(ABC):
 
             return target_schemas
 
-        # Process all schemas
+        # Process all schemas. With a schema_table_filter_expression, schemas
+        # come only from the filter's matches, so no matches means no schemas.
+        schema_list = []
         if not self.catalog_config.schema_table_filter_expression:
             schema_list = self.db_ops.get_all_schemas(self.catalog_name)
 

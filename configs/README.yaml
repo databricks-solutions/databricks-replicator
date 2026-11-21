@@ -173,6 +173,12 @@ replication_config:
   # Optional: whether to create or replace function during UC function replication. default is true to use create or replace function.
   # Set to false to use create function if not exists (existing target functions are left unchanged).
   create_or_replace_function: true
+  # Optional: extra source -> target catalog renames applied to fully qualified references
+  # (catalog.schema.object) inside replayed view / SQL MV / SQL ST bodies.
+  # source_catalog -> catalog_name is always applied when the names differ; add entries here for
+  # views that also reference other replicated catalogs. String literals and comments are not rewritten.
+  # catalog_reference_mapping:
+  #   other_source_catalog: other_target_catalog
   # Optional: whether to overwrite tags during replication. default is true.
   # Tag replication applies to catalog, schema, table/view/SQL MV/SQL ST, column, and volume. Foreign tables and DLT-defined MV/ST are skipped because the target object does not exist.
   overwrite_tags: true

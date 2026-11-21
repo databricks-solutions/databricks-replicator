@@ -254,9 +254,6 @@ class ProviderFactory:
             operation_type: Type of operation (backup, replication, etc.)
             error_message: Optional error message
         """
-        # Suppress unused argument warning for error_message
-        _ = error_message
-
         end_time = datetime.now(timezone.utc)
         duration = (end_time - start_time).total_seconds()
 
@@ -270,7 +267,13 @@ class ProviderFactory:
         )
         total_operations = len(results) if results else 0
 
-        status = "completed" if failed_operations == 0 else "completed_with_failures"
+        if error_message:
+            # The operation itself aborted (not just individual objects).
+            status = "failed"
+        elif failed_operations == 0:
+            status = "completed"
+        else:
+            status = "completed_with_failures"
 
         # Count unique catalogs, schemas, and tables
         catalogs = set(r.catalog_name for r in results if results and r.catalog_name)
@@ -296,6 +299,8 @@ class ProviderFactory:
             f"{total_operations} operations:{successful_operations} successful, {failed_operations} failed,{skipped_operations} skipped. Success rate: {successful_operations}/"
             f"{total_operations} ({success_rate:.1f}%)"
         )
+        if error_message:
+            summary_text += f" Error: {error_message}"
 
         return RunSummary(
             run_id=self.run_id,
@@ -491,7 +496,11 @@ class ProviderFactory:
             error_msg = f"{operation_name.title()} operation failed: {str(e)}"
             self.logger.error(error_msg)
 
-            summary = self.create_summary(start_time, [], operation_name, error_msg)
+            # Keep results already collected so they are reflected in the
+            # summary, and mark the operation itself as failed.
+            summary = self.create_summary(
+                start_time, self.completed_run_results, operation_name, error_msg
+            )
             self.log_run_summary(summary, operation_name)
 
             return summary
