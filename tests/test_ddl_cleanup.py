@@ -1,16 +1,16 @@
-"""Tests for ddl_cleanup.py — TBLPROPERTIES cleanup and inline mask/row filter stripping."""
+"""Tests for sql_utils.py — TBLPROPERTIES cleanup and inline mask/row filter stripping."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
 from data_replication.config.models import ReplicationConfig
-from data_replication.ddl_cleanup import (
+from data_replication.providers.replication_provider import ReplicationProvider
+from data_replication.sql_utils import (
     _tokenize,
     strip_inline_masks_and_row_filters,
     strip_unreplayable_tblproperties,
 )
-from data_replication.providers.replication_provider import ReplicationProvider
 
 ROW_TRACKING_DDL = """CREATE TABLE `src`.`s`.`t` (
   id BIGINT,
@@ -30,6 +30,23 @@ class TestTokenize:
     def test_roundtrip(self):
         sql = "SELECT 'a''b', `x``y`, \"q\" -- c\n /* d */ FROM t"
         assert "".join(t.text for t in _tokenize(sql)) == sql
+
+    def test_nested_block_comment_is_one_token(self):
+        sql = "SELECT /* a /* b */ c */ 1"
+        comments = [t.text for t in _tokenize(sql) if t.kind == "comment"]
+        assert comments == ["/* a /* b */ c */"]
+
+    def test_property_inside_nested_comment_is_untouched(self):
+        ddl = (
+            "CREATE TABLE t (id INT)\nTBLPROPERTIES (\n"
+            "  'delta.minWriterVersion' = '7',\n"
+            "  /* old /* note */ 'delta.minReaderVersion' = '3' */\n"
+            "  'custom.keep' = 'yes')"
+        )
+        out, removed = strip_unreplayable_tblproperties(ddl)
+        assert removed == ["delta.minWriterVersion"]
+        assert "/* old /* note */ 'delta.minReaderVersion' = '3' */" in out
+        assert "'custom.keep' = 'yes'" in out
 
 
 class TestStripUnreplayableTblproperties:

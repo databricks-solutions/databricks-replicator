@@ -1,4 +1,4 @@
-"""Tests for catalog reference rewriting in replayed view / MV / ST DDL (#37)."""
+"""Tests for sql_utils.rewrite_catalog_references and its use in view/MV/ST replay."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from data_replication.providers.replication_provider import ReplicationProvider
-from data_replication.sql_rewrite import rewrite_catalog_references
+from data_replication.sql_utils import rewrite_catalog_references
 
 M = {"src": "tgt"}
 
@@ -217,3 +217,10 @@ def test_catalog_reference_mapping_config_field():
     cfg = ReplicationConfig(catalog_reference_mapping={"a": "b"})
     assert cfg.catalog_reference_mapping == {"a": "b"}
     assert ReplicationConfig().catalog_reference_mapping is None
+
+
+def test_reference_inside_nested_comment_is_untouched():
+    sql = "SELECT 1 /* a /* b */ src.s.t */ FROM src.s.t"
+    assert rewrite_catalog_references(sql, M) == (
+        "SELECT 1 /* a /* b */ src.s.t */ FROM tgt.s.t"
+    )

@@ -32,12 +32,12 @@ from ..constants import (
     DICT_FOR_CREATION_VOLUME,
     DICT_FOR_UPDATE_VOLUME,
 )
-from ..ddl_cleanup import (
+from ..exceptions import ReplicationError, TableNotFoundError
+from ..sql_utils import (
+    rewrite_catalog_references,
     strip_inline_masks_and_row_filters,
     strip_unreplayable_tblproperties,
 )
-from ..exceptions import ReplicationError, TableNotFoundError
-from ..sql_rewrite import rewrite_catalog_references
 from ..utils import (
     create_spark_session,
     create_workspace_client,

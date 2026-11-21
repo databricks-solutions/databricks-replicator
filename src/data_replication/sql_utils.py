@@ -1,22 +1,25 @@
 """
-Clean up ``SHOW CREATE TABLE`` output so it can be replayed on a target workspace.
+Token-aware SQL helpers for replaying source DDL on a target workspace.
 
-Source DDL can contain content that makes the target ``CREATE`` fail:
+All helpers share one tokenizer, so string literals, backticked identifiers and
+comments are never rewritten:
 
-* engine-derived table properties (protocol versions, row-tracking
-  materialized column names, ...) that are rejected when set explicitly;
-* inline column masks (``MASK fn``) and row filters (``WITH ROW FILTER fn
-  ON (...)``) that reference functions which may not exist on the target.
-
-The helpers here work on a light-weight token stream rather than regexes, so
-string literals, backticked identifiers and comments are never rewritten.
+* ``strip_unreplayable_tblproperties``: drop engine-derived table properties
+  (protocol versions, row-tracking materialized column names, ...) that are
+  rejected when set explicitly.
+* ``strip_inline_masks_and_row_filters``: drop inline column masks
+  (``MASK fn``) and row filters (``WITH ROW FILTER fn ON (...)``) whose
+  functions may not exist on the target.
+* ``rewrite_catalog_references``: rewrite the catalog in fully qualified
+  ``catalog.schema.object`` references (view / MV / ST bodies) when the target
+  catalog has a different name.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from .constants import UNREPLAYABLE_TBLPROPERTIES
 
@@ -37,6 +40,25 @@ class _Token:
 _WORD_RE = re.compile(r"[A-Za-z0-9_$]+")
 
 
+def _scan_block_comment(sql: str, i: int) -> int:
+    """Return the index just past a (possibly nested) ``/* ... */`` comment."""
+    n = len(sql)
+    depth = 0
+    j = i
+    while j < n:
+        if sql.startswith("/*", j):
+            depth += 1
+            j += 2
+        elif sql.startswith("*/", j):
+            depth -= 1
+            j += 2
+            if depth == 0:
+                return j
+        else:
+            j += 1
+    return n
+
+
 def _tokenize(sql: str) -> List[_Token]:
     """Split SQL into tokens. Concatenating token texts returns the input."""
     tokens: List[_Token] = []
@@ -53,8 +75,7 @@ def _tokenize(sql: str) -> List[_Token]:
             j = n if j == -1 else j
             tokens.append(_Token("comment", sql[i:j]))
         elif c == "/" and sql.startswith("/*", i):
-            j = sql.find("*/", i + 2)
-            j = n if j == -1 else j + 2
+            j = _scan_block_comment(sql, i)
             tokens.append(_Token("comment", sql[i:j]))
         elif c in ("'", '"', "`"):
             j = i + 1
@@ -360,3 +381,104 @@ def strip_inline_masks_and_row_filters(ddl: str) -> Tuple[str, List[str]]:
         pos = end
     out.append(_join(tokens[pos:]))
     return "".join(out), removed
+
+
+# ---------------------------------------------------------------------------
+# Catalog reference rewriting
+# ---------------------------------------------------------------------------
+
+_SIMPLE_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _is_name(t: _Token) -> bool:
+    return t.kind in ("word", "ident")
+
+
+def _is_dot(t: _Token) -> bool:
+    return t.kind == "punct" and t.text == "."
+
+
+def _ident_value(t: _Token) -> str:
+    if t.kind == "ident":
+        text = t.text
+        inner = text[1:-1] if text.endswith("`") and len(text) >= 2 else text[1:]
+        return inner.replace("``", "`")
+    return t.text
+
+
+def _quote_ident(name: str, force: bool) -> str:
+    if not force and _SIMPLE_IDENT_RE.match(name):
+        return name
+    return "`" + name.replace("`", "``") + "`"
+
+
+def _prev_sig(tokens: List[_Token], i: int) -> Optional[int]:
+    """Index of the last significant token at or before ``i``."""
+    while i >= 0:
+        if tokens[i].significant:
+            return i
+        i -= 1
+    return None
+
+
+def _qualified_parts_after(tokens: List[_Token], i: int) -> int:
+    """Count ``.part`` segments following the name at ``tokens[i]``."""
+    count = 0
+    j: Optional[int] = i + 1
+    while True:
+        j = _next_sig(tokens, j)
+        if j is None or not _is_dot(tokens[j]):
+            return count
+        j = _next_sig(tokens, j + 1)
+        if j is None or not _is_name(tokens[j]):
+            return count
+        count += 1
+        j += 1
+
+
+def rewrite_catalog_references(sql: str, catalog_map: Optional[Dict[str, str]]) -> str:
+    """Rewrite catalog names in fully qualified object references.
+
+    An identifier is treated as a catalog reference only when it is the first
+    part of a name with at least three parts (``catalog.schema.object``), i.e.
+    it is not preceded by ``.`` and is followed by two or more ``.part``
+    segments. Two-part names are left alone because they are usually
+    ``alias.column`` or ``schema.table``.
+
+    Matching is case-insensitive and works for bare and backticked
+    identifiers. String literals and comments are never modified. Backticked
+    references stay backticked; bare references are backticked only when the
+    target name requires quoting.
+
+    Args:
+        sql: SQL text to rewrite.
+        catalog_map: Mapping of source catalog name -> target catalog name.
+
+    Returns:
+        The rewritten SQL. Returned unchanged if ``catalog_map`` is empty or
+        maps every catalog to itself.
+    """
+    if not sql or not catalog_map:
+        return sql
+    mapping = {
+        str(src).lower(): str(tgt)
+        for src, tgt in catalog_map.items()
+        if src and tgt and str(src).lower() != str(tgt).lower()
+    }
+    if not mapping:
+        return sql
+
+    tokens = _tokenize(sql)
+    out: List[str] = []
+    for idx, tok in enumerate(tokens):
+        if _is_name(tok):
+            target = mapping.get(_ident_value(tok).lower())
+            if target is not None:
+                prev = _prev_sig(tokens, idx - 1)
+                if (prev is None or not _is_dot(tokens[prev])) and (
+                    _qualified_parts_after(tokens, idx) >= 2
+                ):
+                    out.append(_quote_ident(target, force=tok.kind == "ident"))
+                    continue
+        out.append(tok.text)
+    return "".join(out)
