@@ -1765,6 +1765,10 @@ class ReplicationProvider(BaseProvider):
         attempt = 1
         max_attempts = table_config.retry.max_attempts
         last_exception = None
+        # Initialised before the try so the failure path can report them even
+        # when the tag lookup itself raises.
+        column_with_tags_in_source = 0
+        column_with_tags_in_target = 0
 
         run_results = []
 

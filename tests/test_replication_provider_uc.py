@@ -551,12 +551,6 @@ class TestColumnTags:
         [r] = p._uc_replicate_column_tags("s", table_config())
         assert r.status == "failed" and r.object_type == "column_tag"
 
-    @pytest.mark.xfail(
-        reason="bug: the failure handler of _uc_replicate_column_tags reads "
-        "column_with_tags_in_source, which is unbound when the tag lookup raises, "
-        "so UnboundLocalError escapes",
-        strict=True,
-    )
     def test_exception(self):
         p, _, _ = self._provider([], [])
         p.source_dbops.get_column_tags_df.side_effect = RuntimeError("tags down")
