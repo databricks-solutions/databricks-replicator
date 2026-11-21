@@ -453,14 +453,6 @@ class TestRunOperations:
         assert any("Replication operation failed: boom" in m for m in caplog.messages)
         f.audit_logger.log_operation.assert_called_once()
 
-    @pytest.mark.xfail(
-        reason=(
-            "bug: an unexpected exception in run_operations is summarised from an "
-            "empty result list, so the audit summary says status='completed' with "
-            "0 failures and drops results already collected"
-        ),
-        strict=True,
-    )
     def test_unexpected_error_is_not_summarised_as_completed(self, patched, config):
         f = self._factory(config, uc_object_types=[UCObjectType.ALL])
         f._replicate_external_locations.side_effect = RuntimeError("boom")
