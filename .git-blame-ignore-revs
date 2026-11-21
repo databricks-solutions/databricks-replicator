@@ -1,0 +1,5 @@
+# Bulk reformat commits, skipped by `git blame` (GitHub applies this automatically;
+# locally: git config blame.ignoreRevsFile .git-blame-ignore-revs).
+
+# Apply ruff format and lint fixes
+f0774df6c9275b82ab16eb98f28cbc54ccd90d01

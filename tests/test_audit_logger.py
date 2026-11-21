@@ -15,8 +15,8 @@ from data_replication.audit.logger import (
 )
 from data_replication.config.models import LoggingConfig
 
-
 # ---------- Formatters ----------
+
 
 class TestJSONFormatter:
     def test_produces_valid_json_with_core_fields(self):
@@ -62,6 +62,7 @@ class TestJSONFormatter:
             raise RuntimeError("kaboom")
         except RuntimeError:
             import sys
+
             record = logging.LogRecord(
                 name="x",
                 level=logging.ERROR,
@@ -93,6 +94,7 @@ def test_text_formatter_contains_standard_fields():
 
 
 # ---------- DataReplicationLogger ----------
+
 
 @pytest.fixture
 def logger():

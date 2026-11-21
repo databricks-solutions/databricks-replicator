@@ -7,7 +7,7 @@ different components to log operations to audit tables.
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 
 from databricks.connect import DatabricksSession
 from pyspark.sql.types import (
@@ -18,7 +18,6 @@ from pyspark.sql.types import (
     StructType,
     TimestampType,
 )
-
 
 from data_replication.audit.logger import DataReplicationLogger
 from data_replication.databricks_operations import DatabricksOperations

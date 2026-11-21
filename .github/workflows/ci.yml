@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and format (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "ruff>=0.15.0"
+      - run: ruff check --output-format=github .
+      - run: ruff format --check .
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            setup.py
+      - run: pip install -r requirements-dev.txt -e .
+      # pytest.ini requires 70% coverage; current coverage is ~37%.
+      # Gate at the current level so coverage can't regress, and raise this
+      # as coverage improves (tracked in #53).
+      - run: pytest --cov-fail-under=35 --cov-report=term
+
+  type-check:
+    name: Type check (mypy, report only)
+    runs-on: ubuntu-latest
+    # Existing code has ~590 mypy errors; report them without failing the
+    # build until they are paid down.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            setup.py
+      - run: pip install -r requirements-dev.txt -e .
+      - run: mypy

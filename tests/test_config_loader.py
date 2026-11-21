@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-import yaml
-from pathlib import Path
-
 import pytest
+import yaml
 
 from data_replication.config.loader import (
     ConfigLoader,
     ConfigurationError,
-    load_config,
-    save_config,
     validate_config_dict,
 )
 from data_replication.config.models import ReplicationSystemConfig
 
-
 # ---------- Helpers ----------
+
 
 def _base_cfg():
     return {
@@ -54,6 +50,7 @@ def _env_cfg_single_default():
 
 # ---------- load_from_dict ----------
 
+
 class TestLoadFromDict:
     def test_requires_connect_configs(self):
         with pytest.raises(ConfigurationError):
@@ -77,6 +74,7 @@ class TestLoadFromDict:
 
 
 # ---------- load_from_file + environments.yaml merging ----------
+
 
 class TestLoadFromFile:
     def test_missing_file_raises(self, tmp_path):
@@ -130,9 +128,7 @@ class TestLoadFromFile:
         cfg_path = tmp_path / "cfg.yaml"
         cfg_path.write_text(yaml.safe_dump(_base_cfg()))
         with pytest.raises(ConfigurationError, match="Custom environments file"):
-            ConfigLoader.load_from_file(
-                cfg_path, env_path=str(tmp_path / "nope.yaml")
-            )
+            ConfigLoader.load_from_file(cfg_path, env_path=str(tmp_path / "nope.yaml"))
 
     def test_unknown_environment_name(self, tmp_path):
         cfg_path = tmp_path / "cfg.yaml"
@@ -144,6 +140,7 @@ class TestLoadFromFile:
 
 
 # ---------- save_to_file round-trip ----------
+
 
 class TestSaveRoundtrip:
     def test_save_writes_file(self, tmp_path):
@@ -168,6 +165,7 @@ class TestSaveRoundtrip:
 
 # ---------- Convenience wrappers ----------
 
+
 def test_validate_config_dict(tmp_path):
     cfg = _base_cfg()
     cfg["source_databricks_connect_config"] = {
@@ -185,6 +183,7 @@ def test_validate_config_dict(tmp_path):
 
 
 # ---------- load_environments_config ----------
+
 
 class TestLoadEnvironmentsConfig:
     def test_missing_file(self, tmp_path):

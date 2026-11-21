@@ -15,8 +15,8 @@ import pytest
 
 from data_replication.databricks_operations import DatabricksOperations
 
-
 # ---------- Fixtures ----------
+
 
 @pytest.fixture
 def wc_ops():
@@ -33,6 +33,7 @@ def spark_ops():
 
 
 # ---------- WorkspaceClient guard ----------
+
 
 @pytest.mark.parametrize(
     "method,args",
@@ -62,6 +63,7 @@ def test_methods_require_workspace_client(method, args):
 
 
 # ---------- Happy paths ----------
+
 
 class TestCatalogWrappers:
     def test_get_catalog_delegates(self, wc_ops):
@@ -144,6 +146,7 @@ class TestExternalLocationWrappers:
 
 
 # ---------- SQL-based helpers ----------
+
 
 class TestIfCatalogExists:
     def test_returns_true_when_rows(self, spark_ops):

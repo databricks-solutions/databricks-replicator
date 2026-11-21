@@ -12,8 +12,8 @@ from tenacity import RetryError
 
 from data_replication import utils
 
-
 # ---------- map_cloud_url ----------
+
 
 class TestMapCloudUrl:
     def test_returns_none_for_empty_inputs(self):
@@ -41,6 +41,7 @@ class TestMapCloudUrl:
 
 # ---------- replace_cloud_url ----------
 
+
 class TestReplaceCloudUrl:
     def test_passes_through_empty(self):
         assert utils.replace_cloud_url("", {"a/": "b/"}) == ""
@@ -65,6 +66,7 @@ class TestReplaceCloudUrl:
 
 # ---------- map_user ----------
 
+
 class TestMapUser:
     def test_direct_mapping(self):
         assert utils.map_user("alice", {"alice": "bob"}) == "bob"
@@ -78,6 +80,7 @@ class TestMapUser:
 
 
 # ---------- merge_maps ----------
+
 
 class TestMergeMaps:
     def test_source_only(self):
@@ -103,11 +106,10 @@ class TestMergeMaps:
 
 # ---------- filter_common_maps ----------
 
+
 class TestFilterCommonMaps:
     def test_returns_uncommon_pairs(self):
-        src, tgt = utils.filter_common_maps(
-            [{"a": 1}, {"b": 2}], [{"a": 1}, {"c": 3}]
-        )
+        src, tgt = utils.filter_common_maps([{"a": 1}, {"b": 2}], [{"a": 1}, {"c": 3}])
         assert src == [{"b": 2}]
         assert tgt == [{"c": 3}]
 
@@ -117,6 +119,7 @@ class TestFilterCommonMaps:
 
 
 # ---------- merge_dicts_recursive ----------
+
 
 class TestMergeDictsRecursive:
     def test_both_none_returns_none(self):
@@ -142,6 +145,7 @@ class TestMergeDictsRecursive:
 
 
 # ---------- merge_models_recursive ----------
+
 
 class _ChildModel(BaseModel):
     x: Optional[int] = None
@@ -181,9 +185,13 @@ class TestMergeModelsRecursive:
 
 # ---------- recursive_substitute ----------
 
+
 class TestRecursiveSubstitute:
     def test_string_substitution(self):
-        assert utils.recursive_substitute("hello {{name}}", "world", "{{name}}") == "hello world"
+        assert (
+            utils.recursive_substitute("hello {{name}}", "world", "{{name}}")
+            == "hello world"
+        )
 
     def test_none_preserved(self):
         assert utils.recursive_substitute(None, "x") is None
@@ -210,6 +218,7 @@ class TestRecursiveSubstitute:
 
 # ---------- unwrap_retry_error ----------
 
+
 class TestUnwrapRetryError:
     def test_non_retry_error(self):
         assert utils.unwrap_retry_error(ValueError("boom")) == "boom"
@@ -223,6 +232,7 @@ class TestUnwrapRetryError:
 
 
 # ---------- get_workspace_url_from_host ----------
+
 
 class TestGetWorkspaceUrlFromHost:
     @pytest.mark.parametrize(
@@ -238,6 +248,7 @@ class TestGetWorkspaceUrlFromHost:
 
 
 # ---------- set_envs ----------
+
 
 class TestSetEnvs:
     @pytest.fixture(autouse=True)
@@ -300,6 +311,7 @@ class TestSetEnvs:
 
 
 # ---------- retry_with_logging ----------
+
 
 class TestRetryWithLogging:
     def _cfg(self, max_attempts=3, delay=0):

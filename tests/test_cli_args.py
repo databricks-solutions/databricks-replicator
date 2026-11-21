@@ -9,8 +9,8 @@ import pytest
 from data_replication.cli import args as cli_args
 from data_replication.config.models import TableType, UCObjectType, VolumeType
 
-
 # ---------- parse_comma_delimited_operations ----------
+
 
 class TestParseOperations:
     def test_empty_defaults_to_all(self):
@@ -42,6 +42,7 @@ class TestParseOperations:
 
 # ---------- parse_comma_delimited_enums ----------
 
+
 class TestParseEnums:
     def test_empty_returns_none(self):
         assert cli_args.parse_comma_delimited_enums("", TableType, "--x") is None
@@ -54,9 +55,7 @@ class TestParseEnums:
 
     def test_rejects_invalid_with_helpful_message(self):
         with pytest.raises(ValueError, match="Valid values are"):
-            cli_args.parse_comma_delimited_enums(
-                "bogus", VolumeType, "--volume-types"
-            )
+            cli_args.parse_comma_delimited_enums("bogus", VolumeType, "--volume-types")
 
     def test_uc_object_types_parsed(self):
         out = cli_args.parse_comma_delimited_enums(
@@ -66,6 +65,7 @@ class TestParseEnums:
 
 
 # ---------- validate_args ----------
+
 
 def _ns(**kw):
     """Build a Namespace with validate_args-required attrs defaulted to None/False."""
@@ -141,14 +141,13 @@ class TestValidateArgs:
         cli_args.validate_args(_ns(volume_streaming_timeout_secs=60))
 
     def test_volume_autoloader_options_json(self):
-        cli_args.validate_args(
-            _ns(volume_autoloader_options='{"k": "v"}')
-        )
+        cli_args.validate_args(_ns(volume_autoloader_options='{"k": "v"}'))
         with pytest.raises(ValueError, match="valid JSON"):
             cli_args.validate_args(_ns(volume_autoloader_options="not-json"))
 
 
 # ---------- setup_argument_parser ----------
+
 
 class TestArgumentParser:
     def test_config_file_required(self):

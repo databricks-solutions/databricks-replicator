@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import copy
-
 import pytest
 from pydantic import ValidationError
 
@@ -23,14 +21,13 @@ from data_replication.config.models import (
     TableConfig,
     TableType,
     TargetCatalogConfig,
-    UCObjectType,
     VolumeConfig,
     VolumeFilesReplicationConfig,
     VolumeType,
 )
 
-
 # ---------- Enums ----------
+
 
 def test_credential_type_values():
     values = {c.value for c in CredentialType if isinstance(c.value, str)}
@@ -38,6 +35,7 @@ def test_credential_type_values():
 
 
 # ---------- AuditConfig ----------
+
 
 class TestAuditConfig:
     def test_normalizes_to_lowercase(self):
@@ -59,6 +57,7 @@ class TestAuditConfig:
 
 
 # ---------- SecretConfig ----------
+
 
 class TestSecretConfig:
     def test_pat_only(self):
@@ -88,6 +87,7 @@ class TestSecretConfig:
 
 # ---------- LoggingConfig ----------
 
+
 class TestLoggingConfig:
     def test_defaults(self):
         cfg = LoggingConfig()
@@ -113,6 +113,7 @@ class TestLoggingConfig:
 
 # ---------- VolumeFilesReplicationConfig bounds ----------
 
+
 class TestVolumeFilesReplicationConfig:
     def test_defaults(self):
         cfg = VolumeFilesReplicationConfig()
@@ -132,11 +133,10 @@ class TestVolumeFilesReplicationConfig:
 
 # ---------- Backup / Replication / Reconciliation field-level lowercase ----------
 
+
 class TestBackupConfig:
     def test_lowercases_catalogs(self):
-        cfg = BackupConfig(
-            enabled=True, source_catalog="CAT", backup_catalog="BKUP"
-        )
+        cfg = BackupConfig(enabled=True, source_catalog="CAT", backup_catalog="BKUP")
         assert cfg.source_catalog == "cat"
         assert cfg.backup_catalog == "bkup"
 
@@ -166,6 +166,7 @@ def test_table_volume_schema_catalog_lowercase():
 
 # ---------- StorageCredentialConfig ----------
 
+
 class TestStorageCredentialConfig:
     def test_accepts_known_types(self):
         cfg = StorageCredentialConfig(
@@ -180,6 +181,7 @@ class TestStorageCredentialConfig:
 
 
 # ---------- ReplicationSystemConfig ----------
+
 
 def _valid_dict():
     return {
@@ -277,6 +279,7 @@ class TestReplicationSystemConfig:
 
 # ---------- EnvironmentsConfig ----------
 
+
 def _env_cfg_dict():
     return {
         "description": "d",
@@ -322,6 +325,7 @@ class TestEnvironmentsConfig:
 
 
 # ---------- extra='forbid' hygiene ----------
+
 
 def test_replication_system_config_rejects_unknown_field():
     d = _valid_dict()
