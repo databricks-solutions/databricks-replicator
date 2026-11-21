@@ -543,10 +543,11 @@ class TestReplicateTable:
         assert r.status == "success"
         assert r.details["intermediate_catalog"] == "inter"
         assert r.details["step1_query"] == (
-            "CREATE OR REPLACE TABLE inter.s.t DEEP CLONE `src`.`s`.`t` "
+            "CREATE OR REPLACE TABLE `inter`.`s`.`t` DEEP CLONE `src`.`s`.`t` "
         )
+        # Step 2 clones from the intermediate copy, not the source (#47).
         assert r.details["step2_query"].startswith(
-            "CREATE OR REPLACE TABLE `tgt`.`s`.`t` DEEP CLONE"
+            "CREATE OR REPLACE TABLE `tgt`.`s`.`t` DEEP CLONE `inter`.`s`.`t`"
         )
         assert len(sql_calls(p.spark)) == 2
 
