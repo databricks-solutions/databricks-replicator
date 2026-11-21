@@ -358,13 +358,6 @@ class TestProcessCatalogOrchestration:
 
         assert sorted(p.table_calls) == ["s1.t0", "s1.t1"]
 
-    @pytest.mark.xfail(
-        reason=(
-            "bug: process_catalog appends the List[RunResult] returned by "
-            "_handle_exception instead of extending, producing a nested list"
-        ),
-        strict=True,
-    )
     def test_catalog_level_exception_returns_flat_failed_result(self):
         p = _provider()
         p.setup_operation_catalogs = MagicMock(side_effect=RuntimeError("boom"))
@@ -375,14 +368,6 @@ class TestProcessCatalogOrchestration:
         assert isinstance(results[0], RunResult)
         assert results[0].status == "failed"
 
-    @pytest.mark.xfail(
-        reason=(
-            "bug: a schema_table_filter_expression that matches no tables leaves "
-            "target_schemas empty, and _get_schemas then reads an unassigned "
-            "schema_list (UnboundLocalError)"
-        ),
-        strict=True,
-    )
     def test_filter_expression_with_no_matches_is_a_noop(self):
         p = _provider(schema_table_filter_expression="table_name = 'missing'")
         p.db_ops.get_schema_tables_by_filter.return_value = []
@@ -691,14 +676,6 @@ class TestFilterExpressions:
         p = _provider(schema_table_filter_expression="table_schema = 's'")
         assert p._build_schema_table_filter_expression() == "table_schema = 's'"
 
-    @pytest.mark.xfail(
-        reason=(
-            "bug: with no target_schemas/exclude_schemas/filter expression "
-            "(e.g. reconciliation sampling alone), the method returns an "
-            "unassigned local (UnboundLocalError)"
-        ),
-        strict=True,
-    )
     def test_no_filters_configured_does_not_raise(self):
         p = _provider()
         assert not p._build_schema_table_filter_expression()
