@@ -760,22 +760,12 @@ class TestReplicateVolumeFiles:
         good = next(q for q in inserts if "good.csv" in q)
         assert "'success'" in good and "'7'" in good
 
-    @pytest.mark.xfail(
-        reason="bug: failure paths build RunResult(volume_name=...), but RunResult "
-        "forbids extra fields, so a ValidationError escapes instead of a failed result",
-        strict=True,
-    )
     def test_missing_source_volume_returns_failed_result(self):
         p, _, _, vc = _volume_files_provider()
         p.db_ops.if_volume_exists.return_value = False
         [r] = p._replicate_volume_files("s", vc)
         assert r.status == "failed"
 
-    @pytest.mark.xfail(
-        reason="bug: failure paths build RunResult(volume_name=...), but RunResult "
-        "forbids extra fields, so a ValidationError escapes instead of a failed result",
-        strict=True,
-    )
     def test_stream_timeout_returns_failed_result(self):
         p, _, _, vc = _volume_files_provider(terminated=False)
         [r] = p._replicate_volume_files("s", vc)

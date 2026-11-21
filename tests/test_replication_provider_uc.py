@@ -135,11 +135,6 @@ class TestUcReplicateDdl:
             == "CREATE TABLE IF NOT EXISTS `tgt`.`s`.`t` (a INT)"
         )
 
-    @pytest.mark.xfail(
-        reason="bug: the except branch of _uc_replicate_ddl reads `attempt`, which is "
-        "unbound when SHOW CREATE TABLE fails, so UnboundLocalError escapes",
-        strict=True,
-    )
     def test_show_create_failure_returns_failed_result(self):
         p = _uc_provider()
         p.db_ops.get_table_type.return_value = "VIEW"
@@ -234,11 +229,6 @@ class TestUcReplicateSqlStMv:
         assert "SQL definition not found" in r.error_message
         se.execute_statement.assert_not_called()
 
-    @pytest.mark.xfail(
-        reason="bug: the except branch of _uc_replicate_sql_st_mv reads `attempt`, "
-        "which is unbound when SHOW CREATE TABLE fails, so UnboundLocalError escapes",
-        strict=True,
-    )
     def test_show_create_failure_returns_failed_result(self):
         p, _ = self._provider("MATERIALIZED_VIEW")
         p.source_dbops.show_create_table_ddl.side_effect = RuntimeError("denied")
@@ -320,11 +310,6 @@ class TestTableComments:
         [r] = p._uc_replicate_table_comments("s", table_config())
         assert r.status == "failed" and r.error_message == "lookup"
 
-    @pytest.mark.xfail(
-        reason="bug: single quotes in a table comment are not escaped, so the "
-        "generated COMMENT ON statement is invalid SQL",
-        strict=True,
-    )
     def test_quote_in_comment_is_escaped(self):
         p = self._provider(src="owner's table")
         p._uc_replicate_table_comments("s", table_config())
@@ -410,11 +395,6 @@ class TestColumnComments:
         [r] = p._uc_replicate_column_comments("s", table_config())
         assert r.status == "failed" and r.error_message == "lookup"
 
-    @pytest.mark.xfail(
-        reason="bug: for managed/external tables the column comment string uses "
-        '.replace("\'", "\'") (a no-op), so single quotes are not escaped',
-        strict=True,
-    )
     def test_managed_table_escapes_quotes(self):
         p = self._provider(src=[{"a": "it's"}], tgt=[{"a": ""}])
         p._uc_replicate_column_comments("s", table_config())
@@ -561,12 +541,6 @@ class TestColumnTags:
         [r] = p._uc_replicate_column_tags("s", table_config())
         assert r.status == "failed" and r.object_type == "column_tag"
 
-    @pytest.mark.xfail(
-        reason="bug: the failure handler of _uc_replicate_column_tags reads "
-        "column_with_tags_in_source, which is unbound when the tag lookup raises, "
-        "so UnboundLocalError escapes",
-        strict=True,
-    )
     def test_exception(self):
         p, _, _ = self._provider([], [])
         p.source_dbops.get_column_tags_df.side_effect = RuntimeError("tags down")
