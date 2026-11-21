@@ -82,12 +82,6 @@ class TestEnvironmentMerge:
         config = _load(_write(tmp_path, cfg))
         assert config.cloud_url_mapping == {"abfss://a/": "s3://b/"}
 
-    @pytest.mark.xfail(
-        reason="bug: environment is merged with model_dump() (no exclude_unset), "
-        "so defaults of fields not written in environments.yaml overwrite values "
-        "set explicitly in the main config",
-        strict=True,
-    )
     def test_env_defaults_do_not_override_explicit_config_values(self, tmp_path):
         cfg = _cfg(
             audit_config={"audit_table": "cfg.sch.tbl", "logging_workspace": "source"}

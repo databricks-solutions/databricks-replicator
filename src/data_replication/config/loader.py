@@ -571,7 +571,9 @@ class ConfigLoader:
                     environments_config.get_default_environment()
                 )
 
-            env_config_dict = env_config.model_dump()
+            # Only merge fields actually written in environments.yaml, so model
+            # defaults do not overwrite values set explicitly in the main config.
+            env_config_dict = env_config.model_dump(exclude_unset=True)
             env_config_dict.pop("description", None)
             env_config_dict.pop("is_default", None)
             env_config_dict["env_name"] = environment_name
