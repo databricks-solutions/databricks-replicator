@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test test-unit test-integration lint format type-check quality clean setup venv fix
+.PHONY: help install install-dev test test-unit test-integration lint format format-check type-check quality clean setup venv fix
 
 # Python interpreter and virtual environment
 PYTHON := python3
@@ -15,10 +15,11 @@ help:
 	@echo "  test            - Run all tests with coverage"
 	@echo "  test-unit       - Run unit tests only"
 	@echo "  test-integration - Run integration tests only"
-	@echo "  quality         - Run all code quality checks (lint, format, type-check)"
-	@echo "  fix             - Auto-fix formatting, linting, and type issues"
-	@echo "  lint            - Run flake8 linter"
-	@echo "  format          - Format code with black and isort"
+	@echo "  quality         - Run all checks without modifying files (lint, format-check, type-check)"
+	@echo "  fix             - Auto-fix formatting and lint issues with ruff"
+	@echo "  lint            - Run ruff linter (pycodestyle, pyflakes, isort rules)"
+	@echo "  format          - Format code with ruff"
+	@echo "  format-check    - Check formatting with ruff without modifying files"
 	@echo "  type-check      - Run mypy type checker"
 	@echo "  clean           - Clean up build artifacts and cache files"
 
@@ -54,29 +55,30 @@ test-unit:
 test-integration:
 	$(VENV_ACTIVATE) && pytest -m integration
 
-# Run all code quality checks
-quality: format lint type-check
+# Run all code quality checks (read-only; same as CI)
+quality: lint format-check type-check
 	@echo "All quality checks passed!"
 
-# Run linter
+# Run linter (settings in pyproject.toml)
 lint:
-	$(VENV_ACTIVATE) && flake8 src/
+	$(VENV_ACTIVATE) && ruff check .
 
 # Format code
 format:
-	$(VENV_ACTIVATE) && black src/ tests/
-	$(VENV_ACTIVATE) && isort src/ tests/
+	$(VENV_ACTIVATE) && ruff format .
 
-# Run type checker
+# Check formatting without modifying files
+format-check:
+	$(VENV_ACTIVATE) && ruff format --check .
+
+# Run type checker (settings in pyproject.toml)
 type-check:
-	$(VENV_ACTIVATE) && mypy src/
+	$(VENV_ACTIVATE) && mypy
 
-# Auto-fix formatting, linting, and type issues
+# Auto-fix formatting and lint issues
 fix:
-	$(VENV_ACTIVATE) && black --line-length 78 src/ tests/
-	$(VENV_ACTIVATE) && isort src/ tests/
-	$(VENV_ACTIVATE) && autoflake --remove-all-unused-imports --remove-unused-variables --remove-duplicate-keys --in-place --recursive src/ tests/
-	find src/ tests/ -name "*.py" -exec sed -i '' 's/[[:space:]]*$$//' {} \;
+	$(VENV_ACTIVATE) && ruff check --fix .
+	$(VENV_ACTIVATE) && ruff format .
 	@echo "Auto-fixes applied. Run 'make quality' to check for remaining issues."
 
 # Clean up build artifacts and cache files

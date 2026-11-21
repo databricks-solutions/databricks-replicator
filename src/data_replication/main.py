@@ -45,9 +45,9 @@ from data_replication.providers.provider_factory import ProviderFactory
 from data_replication.utils import (
     create_spark_session,
     get_spark_workspace_url,
-    validate_spark_session,
     get_workspace_url_from_host,
     unwrap_retry_error,
+    validate_spark_session,
 )
 
 
@@ -387,7 +387,9 @@ def main():
                     "Reconciliation disabled or No catalogs configured for reconciliation"
                 )
 
-        logger.info(f"All Operations Ends. Check log with run_id {run_id} in {config.audit_config.audit_table} at {logging_workspace_url} {'-' * 30}")
+        logger.info(
+            f"All Operations Ends. Check log with run_id {run_id} in {config.audit_config.audit_table} at {logging_workspace_url} {'-' * 30}"
+        )
 
     except ConfigurationError as e:
         logger.error(f"Configuration error: {e}")

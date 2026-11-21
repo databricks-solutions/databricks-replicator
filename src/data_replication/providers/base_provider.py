@@ -5,15 +5,14 @@ This module provides shared functionality that can be reused across different
 provider types like backup, replication, and reconciliation.
 """
 
+import random
+import re
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from concurrent.futures import as_completed
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import List, Optional
-import random
-import re
 
 from databricks.connect import DatabricksSession
 from databricks.sdk import WorkspaceClient
@@ -22,16 +21,15 @@ from databricks.sdk.service.catalog import (
     PermissionsChange,
     Privilege,
 )
-
 from pyspark.sql.utils import AnalysisException
 
 from data_replication.utils import (
     filter_common_maps,
+    map_cloud_url,
+    merge_maps,
     merge_models_recursive,
     recursive_substitute,
     retry_with_logging,
-    merge_maps,
-    map_cloud_url,
 )
 
 from ..audit.audit_logger import AuditLogger
@@ -47,6 +45,13 @@ from ..config.models import (
     UCObjectType,
     VolumeConfig,
 )
+from ..constants import (
+    DICT_FOR_CREATION_CATALOG,
+    DICT_FOR_CREATION_SCHEMA,
+    DICT_FOR_UPDATE_CATALOG,
+    DICT_FOR_UPDATE_SCHEMA,
+    SKIP_PROCESSED_TABLES,
+)
 from ..databricks_operations import DatabricksOperations
 from ..exceptions import (
     BackupError,
@@ -54,13 +59,6 @@ from ..exceptions import (
     ReconciliationError,
     ReplicationError,
     SparkSessionError,
-)
-from ..constants import (
-    DICT_FOR_CREATION_CATALOG,
-    DICT_FOR_CREATION_SCHEMA,
-    DICT_FOR_UPDATE_CATALOG,
-    DICT_FOR_UPDATE_SCHEMA,
-    SKIP_PROCESSED_TABLES,
 )
 
 
@@ -473,7 +471,9 @@ class BaseProvider(ABC):
                         schema_run_result.extend(run_result)
                         self.audit_logger.log_results(schema_run_result)
                     if UCObjectType.ALL not in self.catalog_config.uc_object_types:
-                        uc_object_types_schema_processed.remove(UCObjectType.SCHEMA_GRANT)
+                        uc_object_types_schema_processed.remove(
+                            UCObjectType.SCHEMA_GRANT
+                        )
                     if len(uc_object_types_schema_processed) == 0:
                         continue
 
@@ -744,7 +744,7 @@ class BaseProvider(ABC):
             f"starting {self.get_operation_name()} of {len(schema_table_list)} tables in catalog {self.catalog_name} using {concurrency.max_workers} workers"
         )
         self.logger.debug(
-            f"Tables: {[f'{item['schema_config'].schema_name}.{item['table_config'].table_name}' for item in schema_table_list]}"
+            f"Tables: {[f'{item["schema_config"].schema_name}.{item["table_config"].table_name}' for item in schema_table_list]}"
         )
 
         with ThreadPoolExecutor(max_workers=concurrency.max_workers) as executor:
@@ -820,7 +820,7 @@ class BaseProvider(ABC):
             f"starting {self.get_operation_name()} of {len(schema_volume_list)} volumes in catalog {self.catalog_name} using {concurrency.max_workers} workers"
         )
         self.logger.debug(
-            f"Volumes: {[f'{item['schema_config'].schema_name}.{item['volume_config'].volume_name}' for item in schema_volume_list]}"
+            f"Volumes: {[f'{item["schema_config"].schema_name}.{item["volume_config"].volume_name}' for item in schema_volume_list]}"
         )
 
         with ThreadPoolExecutor(max_workers=concurrency.max_workers) as executor:
@@ -1337,7 +1337,10 @@ class BaseProvider(ABC):
             # get table type filters from schema configuration
             if schema_config.table_types and len(schema_config.table_types) > 0:
                 # Exclude MATERIALIZED_VIEW for replication operation as it is not supported
-                if self.get_operation_name() in ("replication") and TableType.MATERIALIZED_VIEW in schema_config.table_types:
+                if (
+                    self.get_operation_name() in ("replication")
+                    and TableType.MATERIALIZED_VIEW in schema_config.table_types
+                ):
                     self.logger.warning(
                         "Excluding MATERIALIZED_VIEW table type for replication operation as it is not supported."
                     )
@@ -1366,7 +1369,13 @@ class BaseProvider(ABC):
                     or UCObjectType.COLUMN_COMMENT in schema_config.uc_object_types
                 ):
                     table_types_set.update(
-                        ["managed", "external", "view", "materialized_view", "streaming_table"]
+                        [
+                            "managed",
+                            "external",
+                            "view",
+                            "materialized_view",
+                            "streaming_table",
+                        ]
                     )
                 if table_types_set:
                     table_types = list(table_types_set)
@@ -1867,7 +1876,11 @@ class BaseProvider(ABC):
         # application_id is a lowercase UUID; users/groups are emails or names
         if not s or "@" in s or len(s) != 36:
             return False
-        return bool(re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", s))
+        return bool(
+            re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", s
+            )
+        )
 
     def _resolve_source_sp_name(self, app_id: str) -> Optional[str]:
         """Look up (and cache) the source SP display name for a given app_id."""
@@ -1996,7 +2009,11 @@ class BaseProvider(ABC):
                 src_name = self._sp_src_app_id_to_name.get(raw)
                 reason = (
                     f"source SP {raw}"
-                    + (f" (display_name={src_name!r})" if src_name else " (source display_name unresolved)")
+                    + (
+                        f" (display_name={src_name!r})"
+                        if src_name
+                        else " (source display_name unresolved)"
+                    )
                     + " has no matching principal on target; add an entry to principal_mapping to map it"
                 )
                 skipped.append({"principal": raw, "reason": reason})
@@ -2219,7 +2236,10 @@ class BaseProvider(ABC):
                             f"Per-principal grant apply failed for "
                             f"{getattr(change, 'principal', None)} on "
                             f"{target_full_name}: {str(pe)}",
-                            extra={"run_id": self.run_id, "operation": "uc_replication"},
+                            extra={
+                                "run_id": self.run_id,
+                                "operation": "uc_replication",
+                            },
                         )
 
             end_time = datetime.now(timezone.utc)
@@ -2272,7 +2292,8 @@ class BaseProvider(ABC):
                     duration_seconds=duration,
                     error_message=(
                         f"{skipped_count} unresolvable principal(s) skipped"
-                        if skipped_count else None
+                        if skipped_count
+                        else None
                     ),
                     details=details,
                     attempt_number=attempt,
@@ -2328,9 +2349,7 @@ class BaseProvider(ABC):
 
         end_time = datetime.now(timezone.utc)
         duration = (end_time - start_time).total_seconds()
-        error_msg = (
-            f"{object_type} replication failed: {source_full_name} -> {target_full_name}"
-        )
+        error_msg = f"{object_type} replication failed: {source_full_name} -> {target_full_name}"
         if last_exception:
             error_msg += f" | Last error: {str(last_exception)}"
         self.logger.error(

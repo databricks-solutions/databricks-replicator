@@ -81,29 +81,39 @@ class TestSqlScalar:
         )
 
     def test_create_or_replace(self):
-        ddl = build_create_function_ddl(self.routine(), [], [], TARGET, create_or_replace=True)
+        ddl = build_create_function_ddl(
+            self.routine(), [], [], TARGET, create_or_replace=True
+        )
         assert ddl.startswith("CREATE OR REPLACE FUNCTION `tgt`.`sch`.`fn`()")
         assert "IF NOT EXISTS" not in ddl
 
     def test_not_deterministic_and_reads_sql_data(self):
         ddl = build_create_function_ddl(
             self.routine(is_deterministic="NO", sql_data_access="READS SQL DATA"),
-            [], [], TARGET,
+            [],
+            [],
+            TARGET,
         )
         assert "\nNOT DETERMINISTIC\n" in ddl
         assert "\nREADS SQL DATA\n" in ddl
 
     def test_unknown_determinism_and_unsupported_access_omitted(self):
         ddl = build_create_function_ddl(
-            self.routine(is_deterministic=None, sql_data_access="MODIFIES SQL DATA", comment=None),
-            [], [], TARGET,
+            self.routine(
+                is_deterministic=None, sql_data_access="MODIFIES SQL DATA", comment=None
+            ),
+            [],
+            [],
+            TARGET,
         )
         assert "DETERMINISTIC" not in ddl
         assert "MODIFIES" not in ddl
         assert "COMMENT" not in ddl
 
     def test_comment_quotes_escaped(self):
-        ddl = build_create_function_ddl(self.routine(comment="it's a \\ test"), [], [], TARGET)
+        ddl = build_create_function_ddl(
+            self.routine(comment="it's a \\ test"), [], [], TARGET
+        )
         assert "COMMENT 'it\\'s a \\\\ test'" in ddl
 
     def test_falls_back_to_data_type(self):
@@ -126,7 +136,8 @@ class TestSqlScalar:
         ddl = build_create_function_ddl(
             self.routine(),
             [_param(1, "we`ird", "ARRAY<STRUCT<a: INT, b: STRING>>")],
-            [], TARGET,
+            [],
+            TARGET,
         )
         assert "(`we``ird` ARRAY<STRUCT<a: INT, b: STRING>>)" in ddl
 
@@ -143,7 +154,9 @@ class TestSqlScalar:
 
     def test_missing_body_raises(self):
         with pytest.raises(UnsupportedFunctionError):
-            build_create_function_ddl(self.routine(routine_definition="  "), [], [], TARGET)
+            build_create_function_ddl(
+                self.routine(routine_definition="  "), [], [], TARGET
+            )
 
 
 class TestSqlTableValued:
@@ -165,7 +178,10 @@ class TestSqlTableValued:
         ddl = build_create_function_ddl(
             self.routine(),
             [_param(1, "min_id", "BIGINT", default="0")],
-            [_col(2, "name", "STRING", comment="display name"), _col(1, "id", "BIGINT")],
+            [
+                _col(2, "name", "STRING", comment="display name"),
+                _col(1, "id", "BIGINT"),
+            ],
             TARGET,
         )
         assert ddl == (
@@ -200,7 +216,11 @@ class TestPython:
 
     def test_python_udf(self):
         ddl = build_create_function_ddl(
-            self.routine(), [_param(1, "s", "STRING")], [], TARGET, create_or_replace=True
+            self.routine(),
+            [_param(1, "s", "STRING")],
+            [],
+            TARGET,
+            create_or_replace=True,
         )
         assert ddl == (
             "CREATE OR REPLACE FUNCTION `tgt`.`sch`.`fn`(`s` STRING)\n"
@@ -213,7 +233,9 @@ class TestPython:
 
     def test_python_body_indentation_preserved(self):
         body = "def f(x):\n    return x\nreturn f(s)"
-        ddl = build_create_function_ddl(self.routine(routine_definition=body), [], [], TARGET)
+        ddl = build_create_function_ddl(
+            self.routine(routine_definition=body), [], [], TARGET
+        )
         assert ddl.endswith(f"AS $$\n{body}\n$$")
 
     def test_python_body_with_dollar_quotes_raises(self):
@@ -249,7 +271,10 @@ def test_cli_parses_function_types():
 
 def test_create_or_replace_function_default():
     assert ReplicationConfig().create_or_replace_function is True
-    assert ReplicationConfig(create_or_replace_function=False).create_or_replace_function is False
+    assert (
+        ReplicationConfig(create_or_replace_function=False).create_or_replace_function
+        is False
+    )
 
 
 # ---------- DatabricksOperations ----------
@@ -292,7 +317,9 @@ def test_get_function_metadata_queries_information_schema():
 def test_get_function_metadata_not_found():
     spark = MagicMock()
     spark.sql.return_value.collect.return_value = []
-    assert DatabricksOperations(spark=spark).get_function_metadata("c", "s", "f") is None
+    assert (
+        DatabricksOperations(spark=spark).get_function_metadata("c", "s", "f") is None
+    )
 
 
 # ---------- ReplicationProvider ----------
@@ -350,13 +377,22 @@ def test_replicate_functions_if_not_exists(provider, schema_config):
     provider.source_dbops.get_functions_in_schema.return_value = ["fn"]
     provider.source_dbops.get_function_metadata.return_value = SCALAR_META
     provider._uc_replicate_functions(schema_config)
-    assert "CREATE FUNCTION IF NOT EXISTS" in provider.target_spark.sql.call_args.args[0]
+    assert (
+        "CREATE FUNCTION IF NOT EXISTS" in provider.target_spark.sql.call_args.args[0]
+    )
 
 
 def test_replicate_functions_failure_and_skip(provider, schema_config):
     provider.source_dbops.get_functions_in_schema.return_value = ["bad", "odd"]
-    odd = {"routine": {"routine_body": "EXTERNAL", "external_language": "SCALA",
-                       "routine_definition": "x"}, "parameters": [], "result_columns": []}
+    odd = {
+        "routine": {
+            "routine_body": "EXTERNAL",
+            "external_language": "SCALA",
+            "routine_definition": "x",
+        },
+        "parameters": [],
+        "result_columns": [],
+    }
     provider.source_dbops.get_function_metadata.side_effect = [SCALAR_META, odd]
     provider.target_spark.sql.side_effect = Exception("boom")
     results = provider._uc_replicate_functions(schema_config)
@@ -413,6 +449,7 @@ def _orchestration_provider(uc_types, calls):
         def _f(*_a, **_k):
             calls.append(name)
             return value
+
         return _f
 
     p._uc_replicate_catalog = rec("catalog", [])
@@ -432,9 +469,15 @@ def test_functions_run_after_schema_and_before_tables():
     p = _orchestration_provider([UCObjectType.ALL], calls)
     p.process_catalog()
     assert calls == [
-        "catalog", "catalog_tag", "catalog_grant",
-        "schema", "schema_tag", "schema_grant",
-        "function", "function_grant", "tables",
+        "catalog",
+        "catalog_tag",
+        "catalog_grant",
+        "schema",
+        "schema_tag",
+        "schema_grant",
+        "function",
+        "function_grant",
+        "tables",
     ]
 
 

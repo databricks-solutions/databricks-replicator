@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import List
 
-from data_replication.config.models import TableType, VolumeType, UCObjectType
+from data_replication.config.models import TableType, UCObjectType, VolumeType
 
 
 def parse_comma_delimited_operations(value: str) -> List[str]:
@@ -36,9 +36,7 @@ def parse_comma_delimited_operations(value: str) -> List[str]:
     # Check for "all" - if present, it must be the only operation
     if "all" in items:
         if len(items) > 1:
-            raise ValueError(
-                "'all' operation cannot be combined with other operations"
-            )
+            raise ValueError("'all' operation cannot be combined with other operations")
         return ["all"]
 
     # Validate each operation
@@ -153,7 +151,9 @@ def validate_args(args) -> None:
             )
 
     # Rule: schema-table-filter-expression and target-tables cannot be used together
-    if args.schema_table_filter_expression and ( args.target_tables or args.target_schemas):
+    if args.schema_table_filter_expression and (
+        args.target_tables or args.target_schemas
+    ):
         raise ValueError(
             "schema-table-filter-expression and target-schemas/target-tables cannot be used together. "
             "Use either --schema-table-filter-expression to filter tables by SQL expression "
@@ -168,19 +168,28 @@ def validate_args(args) -> None:
             )
 
     # Volume argument validation
-    if hasattr(args, 'volume_max_concurrent_copies') and args.volume_max_concurrent_copies is not None:
+    if (
+        hasattr(args, "volume_max_concurrent_copies")
+        and args.volume_max_concurrent_copies is not None
+    ):
         if not (1 <= args.volume_max_concurrent_copies <= 100):
             raise ValueError(
                 f"volume-max-concurrent-copies must be between 1 and 100, got {args.volume_max_concurrent_copies}"
             )
 
-    if hasattr(args, 'volume_streaming_timeout_secs') and args.volume_streaming_timeout_secs is not None:
+    if (
+        hasattr(args, "volume_streaming_timeout_secs")
+        and args.volume_streaming_timeout_secs is not None
+    ):
         if args.volume_streaming_timeout_secs < 60:
             raise ValueError(
                 f"volume-streaming-timeout-secs must be at least 60 seconds, got {args.volume_streaming_timeout_secs}"
             )
 
-    if hasattr(args, 'volume_autoloader_options') and args.volume_autoloader_options is not None:
+    if (
+        hasattr(args, "volume_autoloader_options")
+        and args.volume_autoloader_options is not None
+    ):
         try:
             json.loads(args.volume_autoloader_options)
         except json.JSONDecodeError as e:
@@ -204,8 +213,8 @@ def setup_argument_parser():
         type=str,
         default="all",
         help="Comma-separated list of operations to run. "
-             "Valid operations: all, backup, replication, reconciliation. "
-             "Use 'all' to run all enabled operations (default: all)",
+        "Valid operations: all, backup, replication, reconciliation. "
+        "Use 'all' to run all enabled operations (default: all)",
     )
 
     parser.add_argument(
@@ -264,9 +273,9 @@ def setup_argument_parser():
         "-uc",
         type=str,
         help="comma-separated list of UC metadata types to replicate. "
-             "Acceptable values: all,catalog,catalog_tag,schema,schema_tag,"
-             "view,table,view_tag,table_tag,column_tag,volume,volume_tag,column_comment,"
-             "function,function_grant",
+        "Acceptable values: all,catalog,catalog_tag,schema,schema_tag,"
+        "view,table,view_tag,table_tag,column_tag,volume,volume_tag,column_comment,"
+        "function,function_grant",
     )
 
     parser.add_argument(
@@ -274,7 +283,7 @@ def setup_argument_parser():
         "-tt",
         type=str,
         help="comma-separated list of table types to process. "
-             "Acceptable values: managed,external,streaming_table",
+        "Acceptable values: managed,external,streaming_table",
     )
 
     parser.add_argument(
@@ -282,7 +291,7 @@ def setup_argument_parser():
         "-vt",
         type=str,
         help="comma-separated list of volume types to process. "
-             "Acceptable values: all,managed,external",
+        "Acceptable values: all,managed,external",
     )
 
     parser.add_argument(
@@ -306,7 +315,7 @@ def setup_argument_parser():
         "-sh",
         type=str,
         help="Source Databricks workspace URL to override config file setting. "
-             "e.g. https://adb-123456789.11.azuredatabricks.net/",
+        "e.g. https://adb-123456789.11.azuredatabricks.net/",
     )
 
     parser.add_argument(
@@ -314,7 +323,7 @@ def setup_argument_parser():
         "-th",
         type=str,
         help="Target Databricks workspace URL to override config file setting. "
-             "e.g. https://e2-demo-field-eng.cloud.databricks.com/",
+        "e.g. https://e2-demo-field-eng.cloud.databricks.com/",
     )
 
     parser.add_argument(
@@ -346,7 +355,7 @@ def setup_argument_parser():
     parser.add_argument(
         "--volume-autoloader-options",
         type=str,
-        help="JSON string of autoloader options for volume replication, e.g. '{\"cloudFiles.maxFilesPerTrigger\": \"1000\"}'",
+        help='JSON string of autoloader options for volume replication, e.g. \'{"cloudFiles.maxFilesPerTrigger": "1000"}\'',
     )
 
     parser.add_argument(
@@ -367,7 +376,7 @@ def setup_argument_parser():
         "-p",
         type=str,
         help="Databricks CLI profile name to use when creating the WorkspaceClient. "
-             "If not specified, default authentication is used.",
+        "If not specified, default authentication is used.",
     )
 
     parser.add_argument(
@@ -383,13 +392,13 @@ def parse_and_validate_args():
     """Parse and validate command line arguments."""
     parser = setup_argument_parser()
     args = parser.parse_args()
-    
+
     # Validate arguments
     validate_args(args)
-    
+
     # Parse operations
     operations = parse_comma_delimited_operations(args.operation)
-    
+
     # Parse enum arguments
     uc_object_types_override = parse_comma_delimited_enums(
         args.uc_object_types, UCObjectType, "--uc-object-types"
@@ -400,12 +409,12 @@ def parse_and_validate_args():
     volume_types_override = parse_comma_delimited_enums(
         args.volume_types, VolumeType, "--volume-types"
     )
-    
+
     # Validate config file exists
     config_path = Path(args.config_file)
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
-    
+
     return (
         args,
         operations,

@@ -128,7 +128,9 @@ def build_create_function_ddl(
             replayed (e.g. unknown language, missing body).
     """
     params = [
-        p for p in _sorted_by_position(parameters) if _yes(_get(p, "is_result")) is not True
+        p
+        for p in _sorted_by_position(parameters)
+        if _yes(_get(p, "is_result")) is not True
     ]
     result_cols = _sorted_by_position(result_columns)
 

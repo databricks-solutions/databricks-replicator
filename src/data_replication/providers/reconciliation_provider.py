@@ -216,7 +216,7 @@ class ReconciliationProvider(BaseProvider):
         target_table = f"{target_catalog}.{schema_name}.{table_name}"
         retry = table_config.retry
         table_type = None
-        
+
         self.logger.info(
             f"Starting reconciliation: {source_table} vs {target_table}",
             extra={"run_id": self.run_id, "operation": "reconciliation"},
@@ -429,7 +429,7 @@ class ReconciliationProvider(BaseProvider):
                         catalog_name=target_catalog,
                         schema_name=schema_name,
                         object_name=table_name,
-                        object_type='table',
+                        object_type="table",
                         status="success",
                         start_time=start_time.isoformat(),
                         end_time=end_time.isoformat(),
@@ -484,7 +484,7 @@ class ReconciliationProvider(BaseProvider):
                         catalog_name=target_catalog,
                         schema_name=schema_name,
                         object_name=table_name,
-                        object_type='table',
+                        object_type="table",
                         status="failed",
                         start_time=start_time.isoformat(),
                         end_time=end_time.isoformat(),
@@ -521,7 +521,7 @@ class ReconciliationProvider(BaseProvider):
                     catalog_name=target_catalog,
                     schema_name=schema_name,
                     object_name=table_name,
-                    object_type='table',
+                    object_type="table",
                     status="failed",
                     start_time=start_time.isoformat(),
                     end_time=end_time.isoformat(),
