@@ -37,7 +37,11 @@ from ..constants import (
     DICT_FOR_UPDATE_VOLUME,
 )
 from ..exceptions import ReplicationError, TableNotFoundError
-from ..sql_rewrite import rewrite_catalog_references
+from ..sql_utils import (
+    rewrite_catalog_references,
+    strip_inline_masks_and_row_filters,
+    strip_unreplayable_tblproperties,
+)
 from ..utils import (
     create_spark_session,
     create_workspace_client,
@@ -2894,6 +2898,9 @@ class ReplicationProvider(BaseProvider):
                 table_stmt.split("(", maxsplit=1)[0],
                 f"CREATE TABLE IF NOT EXISTS {target_table} ",
             )
+        step1_query = self._clean_table_ddl(
+            step1_query, source_table, target_table, replication_config
+        )
         if table_type == "EXTERNAL":
             if replication_config.replicate_as_managed:
                 self.logger.info(
@@ -2916,6 +2923,39 @@ class ReplicationProvider(BaseProvider):
         ) = replication_operation(step1_query)
 
         return result, last_exception, attempt, max_attempts, step1_query
+
+    def _clean_table_ddl(
+        self,
+        ddl: str,
+        source_table: str,
+        target_table: str,
+        replication_config,
+    ) -> str:
+        """
+        Remove content from source table DDL that cannot be replayed on target:
+        engine-derived TBLPROPERTIES and, if configured, inline column masks and
+        row filters.
+        """
+        ddl, removed_props = strip_unreplayable_tblproperties(ddl)
+        if removed_props:
+            self.logger.debug(
+                f"Removed un-replayable table properties from DDL of {source_table}: "
+                f"{', '.join(removed_props)}",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
+
+        if getattr(replication_config, "strip_inline_masks_and_row_filters", True):
+            ddl, removed_clauses = strip_inline_masks_and_row_filters(ddl)
+            if removed_clauses:
+                self.logger.warning(
+                    f"Target table {target_table} will be created WITHOUT the column "
+                    f"masks / row filters defined on source {source_table}: "
+                    f"{'; '.join(removed_clauses)}. Set "
+                    f"strip_inline_masks_and_row_filters to false to keep them "
+                    f"(the referenced functions must exist on target).",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+        return ddl
 
     def _uc_replicate_sql_st_mv(
         self,
