@@ -28,17 +28,18 @@ from ..config.models import (
     UCObjectType,
 )
 from ..constants import (
-    DICT_FOR_CREATION_STORAGE_CREDENTIAL,
-    DICT_FOR_UPDATE_STORAGE_CREDENTIAL,
     DICT_FOR_CREATION_EXTERNAL_LOCATION,
-    DICT_FOR_UPDATE_EXTERNAL_LOCATION,
+    DICT_FOR_CREATION_STORAGE_CREDENTIAL,
     DICT_FOR_CREATION_TAG_POLICY,
+    DICT_FOR_UPDATE_EXTERNAL_LOCATION,
+    DICT_FOR_UPDATE_STORAGE_CREDENTIAL,
     DICT_FOR_UPDATE_TAG_POLICY,
 )
 from ..databricks_operations import DatabricksOperations
 from ..utils import (
     create_workspace_client,
     map_cloud_url,
+    unwrap_retry_error,
 )
 
 if TYPE_CHECKING:
@@ -640,7 +641,7 @@ class ProviderFactory:
                                 "Before this credential can access GCS, grant the service account "
                                 "the required role on each target bucket, e.g.:\n"
                                 "  gcloud storage buckets add-iam-policy-binding gs://<bucket> "
-                                "--member=\"serviceAccount:%s\" --role=\"roles/storage.objectAdmin\"",
+                                '--member="serviceAccount:%s" --role="roles/storage.objectAdmin"',
                                 target_credential_name,
                                 gcp_sa_email or "<unknown>",
                                 gcp_sa_email or "<unknown>",
@@ -891,8 +892,8 @@ class ProviderFactory:
                                 "service account for the backing storage credential is granted "
                                 "GCS access, e.g.: "
                                 "gcloud storage buckets add-iam-policy-binding %s "
-                                "--member=\"serviceAccount:<sa-email>\" "
-                                "--role=\"roles/storage.objectAdmin\"",
+                                '--member="serviceAccount:<sa-email>" '
+                                '--role="roles/storage.objectAdmin"',
                                 target_location_name,
                                 target_url,
                             )
@@ -1020,9 +1021,7 @@ class ProviderFactory:
                 self.config.tag_policy_config
                 and self.config.tag_policy_config.tag_policies
             ):
-                tag_policies_to_replicate = (
-                    self.config.tag_policy_config.tag_policies
-                )
+                tag_policies_to_replicate = self.config.tag_policy_config.tag_policies
                 self.logger.info(
                     f"Replicating {len(tag_policies_to_replicate)} configured tag policies"
                 )
@@ -1085,9 +1084,7 @@ class ProviderFactory:
 
                     if not policy_exists:
                         _ = self.target_db_ops.create_tag_policy(dict_for_creation)
-                        self.logger.info(
-                            f"Created tag policy {target_tag_key}"
-                        )
+                        self.logger.info(f"Created tag policy {target_tag_key}")
                     else:
                         dict_for_update_target = {
                             k: getattr(target_tag_policy_info, k, None)
@@ -1097,9 +1094,7 @@ class ProviderFactory:
 
                         if dict_for_update != dict_for_update_target:
                             _ = self.target_db_ops.update_tag_policy(dict_for_update)
-                            self.logger.info(
-                                f"Updated tag policy {target_tag_key}"
-                            )
+                            self.logger.info(f"Updated tag policy {target_tag_key}")
                         else:
                             self.logger.info(
                                 f"Tag policy {target_tag_key} already up to date"
@@ -1135,7 +1130,9 @@ class ProviderFactory:
                     end_time = datetime.now(timezone.utc)
                     duration = (end_time - start_time).total_seconds()
 
-                    error_msg = f"Failed to replicate tag policy {source_tag_key}: {str(e)}"
+                    error_msg = (
+                        f"Failed to replicate tag policy {source_tag_key}: {str(e)}"
+                    )
                     self.logger.error(error_msg)
 
                     results.append(
@@ -1221,7 +1218,7 @@ class ProviderFactory:
                     1
                     for r in catalog_results
                     if catalog_results and r.status == "failed"
-                )                
+                )
                 total = len(catalog_results) if catalog_results else 0
 
                 self.logger.info(
@@ -1230,7 +1227,7 @@ class ProviderFactory:
                 )
 
             except Exception as e:
-                error_msg = f"{operation_name.title()} failed for catalog {catalog.catalog_name}: {str(e)}"
+                error_msg = f"{operation_name.title()} failed for catalog {catalog.catalog_name}: {unwrap_retry_error(e)}"
                 self.logger.error(error_msg)
 
                 # Create failure result
