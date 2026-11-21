@@ -5,17 +5,17 @@ This module provides retry functionality with exponential backoff
 and configurable retry strategies.
 """
 
-from copy import deepcopy
 import os
 import time
-from functools import wraps
-from typing import Dict, Any, TypeVar, Optional
+from copy import deepcopy
 from enum import Enum
-from tenacity import RetryError, retry, wait_exponential, stop_after_attempt
-from pydantic import BaseModel
+from functools import wraps
+from typing import Any, Dict, Optional, TypeVar
+
 from databricks.connect import DatabricksSession
 from databricks.sdk import WorkspaceClient
-
+from pydantic import BaseModel
+from tenacity import RetryError, retry, stop_after_attempt, wait_exponential
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -209,8 +209,7 @@ def retry_with_logging(retry_config, logger=None):
                     else:
                         if logger and hasattr(logger, "error"):
                             logger.error(
-                                f"{func.__name__} failed after "
-                                f"{max_attempts} attempts"
+                                f"{func.__name__} failed after {max_attempts} attempts"
                             )
 
             return False, last_exception, attempt, retry_config.max_attempts
@@ -388,9 +387,9 @@ def map_cloud_url(source_storage_root: str, cloud_url_mapping: dict) -> Optional
     # Find matching source external location
     src_root_lower = source_storage_root.lower()
     for src_location, tgt_location in cloud_url_mapping.items():
-        if src_root_lower.startswith(
-            src_location.lower()
-        ) or src_root_lower.startswith(src_location.rstrip("/").lower()):
+        if src_root_lower.startswith(src_location.lower()) or src_root_lower.startswith(
+            src_location.rstrip("/").lower()
+        ):
             # Calculate relative path and construct target location
             relative_path = source_storage_root[len(src_location) :].lstrip("/")
             target_storage_root = (
@@ -401,6 +400,7 @@ def map_cloud_url(source_storage_root: str, cloud_url_mapping: dict) -> Optional
             return target_storage_root
 
     return None
+
 
 def replace_cloud_url(
     string_with_url: str, cloud_url_mapping: dict, first_only: bool = True
@@ -420,10 +420,10 @@ def replace_cloud_url(
 
     # Find matching source external location
     for src_url, tgt_url in cloud_url_mapping.items():
-        if src_url.rstrip('/').lower() in string_with_url.lower():
+        if src_url.rstrip("/").lower() in string_with_url.lower():
             # Replace source location with target location
             string_with_url = string_with_url.replace(
-                src_url.rstrip('/'), tgt_url.rstrip('/')
+                src_url.rstrip("/"), tgt_url.rstrip("/")
             )
             if first_only:
                 return string_with_url
@@ -509,6 +509,7 @@ def recursive_substitute(obj, substitute_value, target_pattern=""):
     # Return primitive types as-is (int, float, bool, etc.)
     return obj
 
+
 def unwrap_retry_error(error: Exception) -> str:
     """
     Unwrap RetryError to get the actual underlying exception message.
@@ -521,9 +522,9 @@ def unwrap_retry_error(error: Exception) -> str:
     """
     if isinstance(error, RetryError):
         # Get the last attempt's exception
-        if hasattr(error, 'last_attempt') and error.last_attempt:
-            if hasattr(error.last_attempt, 'exception'):
+        if hasattr(error, "last_attempt") and error.last_attempt:
+            if hasattr(error.last_attempt, "exception"):
                 return str(error.last_attempt.exception())
-            if hasattr(error.last_attempt, 'result'):
+            if hasattr(error.last_attempt, "result"):
                 return str(error.last_attempt.result())
     return str(error)

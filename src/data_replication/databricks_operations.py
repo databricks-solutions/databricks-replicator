@@ -5,9 +5,9 @@ This module provides utilities for interacting with Databricks catalogs,
 schemas, and tables.
 """
 
-from typing import Iterator, List, Optional
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Iterator, List, Optional
 
 from databricks.connect import DatabricksSession
 from databricks.sdk import WorkspaceClient
@@ -18,20 +18,21 @@ from databricks.sdk.service.catalog import (
     PrivilegeAssignment,
     SchemaInfo,
     StorageCredentialInfo,
-    VolumeInfo,
     TableInfo,
+    VolumeInfo,
 )
 from databricks.sdk.service.sql import CreateWarehouseRequestWarehouseType
 from databricks.sdk.service.tags import TagPolicy, Value
+
 from data_replication.audit.logger import DataReplicationLogger
 from data_replication.config.models import (
     RetryConfig,
 )
 from data_replication.exceptions import TableNotFoundError
 from data_replication.utils import (
-    retry_with_logging,
     get_spark_current_user,
     get_spark_workspace_url,
+    retry_with_logging,
 )
 
 
@@ -274,6 +275,7 @@ class DatabricksOperations:
         # If no table types specified, return original list
         if table_types is None or len(table_types) == 0 or len(table_names) == 0:
             return table_names
+
         def check_table_type(table_name: str) -> tuple[str, bool]:
             """Check if table type is in allowed types"""
             full_table_name = f"`{catalog_name}`.`{schema_name}`.`{table_name}`"
@@ -1068,8 +1070,8 @@ class DatabricksOperations:
         tag_names_list = None
         tag_maps_list = None
         df = self.spark.sql(f"""
-            select collect_list(b.tag_name) as tag_names_list, collect_list(map(b.tag_name,trim(b.tag_value))) as tag_maps_list 
-            from system.information_schema.catalogs as a inner join system.information_schema.catalog_tags as b 
+            select collect_list(b.tag_name) as tag_names_list, collect_list(map(b.tag_name,trim(b.tag_value))) as tag_maps_list
+            from system.information_schema.catalogs as a inner join system.information_schema.catalog_tags as b
             on a.catalog_name=b.catalog_name
             where a.catalog_name = '{catalog_name}'
             group by a.catalog_name
@@ -1087,8 +1089,8 @@ class DatabricksOperations:
         tag_names_list = None
         tag_maps_list = None
         df = self.spark.sql(f"""
-            select collect_list(b.tag_name) as tag_names_list, collect_list(map(b.tag_name,trim(b.tag_value))) as tag_maps_list 
-            from system.information_schema.schemata as a inner join system.information_schema.schema_tags as b 
+            select collect_list(b.tag_name) as tag_names_list, collect_list(map(b.tag_name,trim(b.tag_value))) as tag_maps_list
+            from system.information_schema.schemata as a inner join system.information_schema.schema_tags as b
             on a.catalog_name=b.catalog_name and a.schema_name=b.schema_name
             where a.schema_name = '{schema_name}' and a.catalog_name = '{catalog_name}'
             group by a.catalog_name, a.schema_name
@@ -1106,8 +1108,8 @@ class DatabricksOperations:
         tag_names_list = None
         tag_maps_list = None
         df = self.spark.sql(f"""
-            select collect_list(b.tag_name) as tag_names_list, collect_list(map(b.tag_name,trim(b.tag_value))) as tag_maps_list 
-            from system.information_schema.tables as a inner join system.information_schema.table_tags as b 
+            select collect_list(b.tag_name) as tag_names_list, collect_list(map(b.tag_name,trim(b.tag_value))) as tag_maps_list
+            from system.information_schema.tables as a inner join system.information_schema.table_tags as b
             on a.table_catalog=b.catalog_name and a.table_schema=b.schema_name and a.table_name=b.table_name
             where a.table_name = '{table_name}' and a.table_schema = '{schema_name}' and a.table_catalog = '{catalog_name}'
             group by a.table_catalog, a.table_schema, a.table_name
@@ -1125,8 +1127,8 @@ class DatabricksOperations:
         tag_names_list = None
         tag_maps_list = None
         df = self.spark.sql(f"""
-            select collect_list(b.tag_name) as tag_names_list, collect_list(map(b.tag_name,trim(b.tag_value))) as tag_maps_list 
-            from system.information_schema.volumes as a inner join system.information_schema.volume_tags as b 
+            select collect_list(b.tag_name) as tag_names_list, collect_list(map(b.tag_name,trim(b.tag_value))) as tag_maps_list
+            from system.information_schema.volumes as a inner join system.information_schema.volume_tags as b
             on a.volume_catalog=b.catalog_name and a.volume_schema=b.schema_name and a.volume_name=b.volume_name
             where a.volume_name = '{volume_name}' and a.volume_schema = '{schema_name}' and a.volume_catalog = '{catalog_name}'
             group by a.volume_catalog, a.volume_schema, a.volume_name
@@ -1143,9 +1145,9 @@ class DatabricksOperations:
         """
 
         df = self.spark.sql(f"""
-            select a.table_catalog, a.table_schema, a.table_name,a.column_name, 
-            collect_list(b.tag_name) as tag_names_list, collect_list(map(b.tag_name,trim(b.tag_value))) as tag_maps_list 
-            from system.information_schema.columns as a inner join system.information_schema.column_tags as b 
+            select a.table_catalog, a.table_schema, a.table_name,a.column_name,
+            collect_list(b.tag_name) as tag_names_list, collect_list(map(b.tag_name,trim(b.tag_value))) as tag_maps_list
+            from system.information_schema.columns as a inner join system.information_schema.column_tags as b
             on a.table_catalog=b.catalog_name and a.table_schema=b.schema_name and a.table_name=b.table_name and a.column_name=b.column_name
             where a.table_name = '{table_name}' and a.table_schema = '{schema_name}' and a.table_catalog = '{catalog_name}'
             group by a.table_catalog, a.table_schema, a.table_name,a.column_name
@@ -1632,7 +1634,11 @@ class DatabricksOperations:
                 )
                 assignments.extend(response.privilege_assignments or [])
                 next_token = getattr(response, "next_page_token", None)
-                if not next_token or next_token == page_token or next_token in seen_tokens:
+                if (
+                    not next_token
+                    or next_token == page_token
+                    or next_token in seen_tokens
+                ):
                     break
                 seen_tokens.add(next_token)
                 page_token = next_token
@@ -1687,9 +1693,7 @@ class DatabricksOperations:
             Exception: If listing tag policies fails or workspace_client is None
         """
         if not self.workspace_client:
-            raise Exception(
-                "WorkspaceClient is required for tag policy operations"
-            )
+            raise Exception("WorkspaceClient is required for tag policy operations")
 
         try:
             tag_policies = list(self.workspace_client.tag_policies.list_tag_policies())
@@ -1711,17 +1715,13 @@ class DatabricksOperations:
             Exception: If getting tag policy fails or workspace_client is None
         """
         if not self.workspace_client:
-            raise Exception(
-                "WorkspaceClient is required for tag policy operations"
-            )
+            raise Exception("WorkspaceClient is required for tag policy operations")
 
         try:
             tag_policy_info = self.workspace_client.tag_policies.get_tag_policy(tag_key)
             return tag_policy_info
         except Exception as e:
-            raise Exception(
-                f"Failed to get tag policy {tag_key}: {str(e)}"
-            ) from e
+            raise Exception(f"Failed to get tag policy {tag_key}: {str(e)}") from e
 
     @staticmethod
     def _build_tag_policy(tag_policy_config: dict) -> TagPolicy:
@@ -1730,8 +1730,7 @@ class DatabricksOperations:
         values: Optional[List[Value]] = None
         if raw_values is not None:
             values = [
-                v if isinstance(v, Value) else Value(name=v["name"])
-                for v in raw_values
+                v if isinstance(v, Value) else Value(name=v["name"]) for v in raw_values
             ]
         return TagPolicy(
             tag_key=tag_policy_config["tag_key"],
@@ -1754,9 +1753,7 @@ class DatabricksOperations:
             Exception: If tag policy creation fails or workspace_client is None
         """
         if not self.workspace_client:
-            raise Exception(
-                "WorkspaceClient is required for tag policy operations"
-            )
+            raise Exception("WorkspaceClient is required for tag policy operations")
 
         try:
             tag_policy = self._build_tag_policy(tag_policy_config)
@@ -1785,9 +1782,7 @@ class DatabricksOperations:
             Exception: If tag policy update fails or workspace_client is None
         """
         if not self.workspace_client:
-            raise Exception(
-                "WorkspaceClient is required for tag policy operations"
-            )
+            raise Exception("WorkspaceClient is required for tag policy operations")
 
         try:
             tag_policy = self._build_tag_policy(tag_policy_config)

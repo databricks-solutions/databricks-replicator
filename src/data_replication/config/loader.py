@@ -5,19 +5,19 @@ This module handles loading and validating YAML configuration files
 using Pydantic models.
 """
 
+import json
 from pathlib import Path
 from typing import Union
 
-import json
 import yaml
 from pydantic import ValidationError
 
 from data_replication.config.models import (
-    ReplicationSystemConfig,
     ConcurrencyConfig,
-    LoggingConfig,
-    TargetCatalogConfig,
     EnvironmentsConfig,
+    LoggingConfig,
+    ReplicationSystemConfig,
+    TargetCatalogConfig,
 )
 from data_replication.utils import merge_dicts_recursive
 
@@ -276,10 +276,7 @@ class ConfigLoader:
 
         # Handle concurrency override
         if concurrency_override is not None:
-            if (
-                not isinstance(concurrency_override, int)
-                or concurrency_override < 1
-            ):
+            if not isinstance(concurrency_override, int) or concurrency_override < 1:
                 raise ConfigurationError(
                     "concurrency_override must be a positive integer"
                 )

@@ -19,8 +19,8 @@ from data_replication.constants import (
 from data_replication.databricks_operations import DatabricksOperations
 from data_replication.providers.provider_factory import ProviderFactory
 
-
 # ---------- Constants contract ----------
+
 
 def test_creation_and_update_dict_keys():
     assert set(DICT_FOR_CREATION_TAG_POLICY) == {"tag_key", "description", "values"}
@@ -28,6 +28,7 @@ def test_creation_and_update_dict_keys():
 
 
 # ---------- TagPolicyConfig ----------
+
 
 class TestTagPolicyConfig:
     def test_defaults(self):
@@ -45,11 +46,13 @@ class TestTagPolicyConfig:
 
 # ---------- UCObjectType enum ----------
 
+
 def test_uc_object_type_includes_tag_policy():
     assert UCObjectType.TAG_POLICY.value == "tag_policy"
 
 
 # ---------- DatabricksOperations tag policy wrappers ----------
+
 
 @pytest.fixture
 def wc_ops():
@@ -136,6 +139,7 @@ class TestTagPolicyWrappers:
 
 
 # ---------- provider_factory._replicate_tag_policies ----------
+
 
 def _make_source_policy(tag_key="cost_center", description="Cost", values=None):
     tp = TagPolicy(

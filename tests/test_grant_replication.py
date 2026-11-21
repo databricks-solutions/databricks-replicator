@@ -7,18 +7,18 @@ from unittest.mock import MagicMock
 
 import pytest
 from databricks.sdk.service.catalog import (
-    PermissionsChange,
-    PrivilegeAssignment,
     GetPermissionsResponse,
+    PermissionsChange,
     Privilege,
+    PrivilegeAssignment,
 )
 
 from data_replication.config.models import RetryConfig, UCObjectType
 from data_replication.databricks_operations import DatabricksOperations
 from data_replication.providers.base_provider import BaseProvider
 
-
 # ---------- Enum ----------
+
 
 def test_grant_enum_values():
     values = {v.value for v in UCObjectType}
@@ -26,6 +26,7 @@ def test_grant_enum_values():
 
 
 # ---------- DBOps: get_grants / update_grants ----------
+
 
 @pytest.fixture
 def wc_ops():
@@ -102,8 +103,10 @@ class TestGrantWrappers:
 
 # ---------- _diff_privileges_per_principal (pure logic) ----------
 
+
 class _Instance:
     """Bare BaseProvider-like instance exposing just the helpers under test."""
+
     def __init__(
         self,
         principal_mapping=None,
@@ -119,12 +122,12 @@ class _Instance:
             tgt_name_to_uuid.setdefault(name, uuid)
 
         self.source_dbops = MagicMock()
-        self.source_dbops.get_sp_display_name_by_app_id.side_effect = (
-            lambda app_id: src_map.get(app_id)
+        self.source_dbops.get_sp_display_name_by_app_id.side_effect = lambda app_id: (
+            src_map.get(app_id)
         )
         self.target_dbops = MagicMock()
-        self.target_dbops.get_sp_app_id_by_display_name.side_effect = (
-            lambda name: tgt_name_to_uuid.get(name)
+        self.target_dbops.get_sp_app_id_by_display_name.side_effect = lambda name: (
+            tgt_name_to_uuid.get(name)
         )
         self.logger = logging.getLogger("test.grants._Instance")
         self._sp_src_app_id_to_name = {}
@@ -226,33 +229,55 @@ class TestSpNameMapping:
     def test_sp_name_mapping_translates_uuid_via_display_name(self):
         inst = _Instance(
             principal_mapping={"etl-prod-sp": "etl-stg-sp"},
-            source_sp_uuid_to_name={"11111111-1111-1111-1111-111111111111": "etl-prod-sp"},
-            target_sp_uuid_to_name={"22222222-2222-2222-2222-222222222222": "etl-stg-sp"},
+            source_sp_uuid_to_name={
+                "11111111-1111-1111-1111-111111111111": "etl-prod-sp"
+            },
+            target_sp_uuid_to_name={
+                "22222222-2222-2222-2222-222222222222": "etl-stg-sp"
+            },
         )
-        assert inst._map_principal("11111111-1111-1111-1111-111111111111") == "22222222-2222-2222-2222-222222222222"
+        assert (
+            inst._map_principal("11111111-1111-1111-1111-111111111111")
+            == "22222222-2222-2222-2222-222222222222"
+        )
 
     def test_explicit_uuid_to_uuid_still_works(self):
         inst = _Instance(
-            principal_mapping={"11111111-1111-1111-1111-111111111111": "22222222-2222-2222-2222-222222222222"},
+            principal_mapping={
+                "11111111-1111-1111-1111-111111111111": "22222222-2222-2222-2222-222222222222"
+            },
         )
-        assert inst._map_principal("11111111-1111-1111-1111-111111111111") == "22222222-2222-2222-2222-222222222222"
+        assert (
+            inst._map_principal("11111111-1111-1111-1111-111111111111")
+            == "22222222-2222-2222-2222-222222222222"
+        )
 
     def test_name_mapping_resolves_display_name_in_value_to_target_uuid(self):
         # User typed UUID as key, but display-name as value; we should still
         # resolve the value to the target UUID via the target cache.
         inst = _Instance(
             principal_mapping={"11111111-1111-1111-1111-111111111111": "etl-stg-sp"},
-            target_sp_uuid_to_name={"22222222-2222-2222-2222-222222222222": "etl-stg-sp"},
+            target_sp_uuid_to_name={
+                "22222222-2222-2222-2222-222222222222": "etl-stg-sp"
+            },
         )
-        assert inst._map_principal("11111111-1111-1111-1111-111111111111") == "22222222-2222-2222-2222-222222222222"
+        assert (
+            inst._map_principal("11111111-1111-1111-1111-111111111111")
+            == "22222222-2222-2222-2222-222222222222"
+        )
 
     def test_unknown_sp_uuid_falls_through_verbatim(self):
         inst = _Instance(
             principal_mapping={"other": "other-tgt"},
-            source_sp_uuid_to_name={"11111111-1111-1111-1111-111111111111": "etl-prod-sp"},
+            source_sp_uuid_to_name={
+                "11111111-1111-1111-1111-111111111111": "etl-prod-sp"
+            },
         )
         # Not in mapping by UUID, source display name not in mapping either
-        assert inst._map_principal("11111111-1111-1111-1111-111111111111") == "11111111-1111-1111-1111-111111111111"
+        assert (
+            inst._map_principal("11111111-1111-1111-1111-111111111111")
+            == "11111111-1111-1111-1111-111111111111"
+        )
 
     def test_duplicate_target_display_names_first_wins(self):
         # The targeted SCIM lookup returns whichever matching SP the server
@@ -278,6 +303,7 @@ def test_replicate_grants_batch_failure_falls_back_per_principal():
         _pa("ghost-sp", Privilege.MODIFY),
     ]
     fp = _FakeProvider(src, [])
+
     # Batch call fails; per-principal calls: alice OK, ghost-sp fails
     def update_side_effect(**kwargs):
         changes = kwargs["changes"]
@@ -324,6 +350,7 @@ def test_replicate_grants_total_failure_when_all_per_principal_fail():
 
 
 # ---------- _replicate_grants integration ----------
+
 
 class _FakeProvider:
     def __init__(self, source_assignments, target_assignments):
