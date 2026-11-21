@@ -506,11 +506,6 @@ class TestMissingDataCheck:
         assert "Missing data check failed" in out["error"]
         assert out["attempt"] == 1
 
-    @pytest.mark.xfail(
-        reason="bug: if get_common_fields raises, the except block reads `attempt` "
-        "before assignment, so an UnboundLocalError hides the real error",
-        strict=True,
-    )
     def test_common_fields_error_is_reported(self):
         spark = FakeSpark()
         p = _provider(spark)

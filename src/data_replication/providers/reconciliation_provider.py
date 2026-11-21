@@ -775,6 +775,10 @@ class ReconciliationProvider(BaseProvider):
         reconciliation_config,
     ) -> Dict[str, Any]:
         """Perform missing data check between source and target tables."""
+        # Read by the except block; set before anything in the try can fail.
+        missing_data_table = None
+        attempt = None
+        max_attempts = None
         try:
             # Use consolidated missing data comparison table
             missing_data_table = f"{reconciliation_config.recon_outputs_catalog}.{reconciliation_config.recon_outputs_schema}.{reconciliation_config.recon_missing_data_table}"
