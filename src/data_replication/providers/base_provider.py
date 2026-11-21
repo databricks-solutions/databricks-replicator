@@ -573,7 +573,7 @@ class BaseProvider(ABC):
                 "catalog",
                 start_time,
             )
-            results.append(result)
+            results.extend(result)
 
         return results
 

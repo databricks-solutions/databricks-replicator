@@ -358,13 +358,6 @@ class TestProcessCatalogOrchestration:
 
         assert sorted(p.table_calls) == ["s1.t0", "s1.t1"]
 
-    @pytest.mark.xfail(
-        reason=(
-            "bug: process_catalog appends the List[RunResult] returned by "
-            "_handle_exception instead of extending, producing a nested list"
-        ),
-        strict=True,
-    )
     def test_catalog_level_exception_returns_flat_failed_result(self):
         p = _provider()
         p.setup_operation_catalogs = MagicMock(side_effect=RuntimeError("boom"))
