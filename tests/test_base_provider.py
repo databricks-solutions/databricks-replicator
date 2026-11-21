@@ -676,14 +676,6 @@ class TestFilterExpressions:
         p = _provider(schema_table_filter_expression="table_schema = 's'")
         assert p._build_schema_table_filter_expression() == "table_schema = 's'"
 
-    @pytest.mark.xfail(
-        reason=(
-            "bug: with no target_schemas/exclude_schemas/filter expression "
-            "(e.g. reconciliation sampling alone), the method returns an "
-            "unassigned local (UnboundLocalError)"
-        ),
-        strict=True,
-    )
     def test_no_filters_configured_does_not_raise(self):
         p = _provider()
         assert not p._build_schema_table_filter_expression()
