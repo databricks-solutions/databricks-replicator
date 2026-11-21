@@ -1,21 +1,38 @@
 """
 Reconstruct CREATE FUNCTION DDL for Unity Catalog functions.
 
-Databricks SQL has no ``SHOW CREATE FUNCTION``, so the DDL is rebuilt from
-``information_schema.routines`` (one row per function),
-``information_schema.parameters`` (input parameters) and
-``information_schema.routine_columns`` (result columns of table-valued
-functions).
+Databricks SQL has no ``SHOW CREATE FUNCTION``, so the DDL is rebuilt from the
+function's metadata as returned by the Databricks SDK
+(``WorkspaceClient.functions.get`` -> ``FunctionInfo``): ordered input
+parameters, ``return_params`` for table-valued functions, and typed fields for
+determinism, data access, body and language.
 
-Everything in this module is pure (plain dicts in, string out) so it can be
-unit-tested without Spark.
+The function is still created with SQL (``CREATE [OR REPLACE] FUNCTION``)
+rather than ``functions.create``: SQL replaces atomically and keeps existing
+grants, and ``functions.create`` is an experimental API.
+
+Everything in this module is pure (``FunctionInfo`` in, string out) so it can
+be unit-tested without Spark or a workspace.
 """
 
-from typing import Any, Dict, Iterable, List, Optional
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+from databricks.sdk.service.catalog import FunctionInfo, FunctionParameterInfo
+
+from .sql_utils import rewrite_catalog_references
 
 
 class UnsupportedFunctionError(ValueError):
     """Raised when a function cannot be reconstructed into replayable DDL."""
+
+
+# FunctionInfo.sql_data_access -> CREATE FUNCTION clause. NO_SQL has no clause
+# (it is only valid for non-SQL bodies, where data access is not declared).
+_DATA_ACCESS_CLAUSES = {
+    "CONTAINS_SQL": "CONTAINS SQL",
+    "READS_SQL_DATA": "READS SQL DATA",
+}
 
 
 def quote_identifier(name: str) -> str:
@@ -28,64 +45,39 @@ def quote_string(value: str) -> str:
     return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
-def _get(row: Dict[str, Any], key: str) -> Any:
-    """Case-insensitive dict lookup (Spark Row.asDict keys are lower case,
-    but be lenient for hand-built rows)."""
-    if key in row:
-        return row[key]
-    upper = key.upper()
-    if upper in row:
-        return row[upper]
-    return None
+def _enum_text(value: Any) -> str:
+    """Upper-case text of an SDK enum (or plain string) value."""
+    if value is None:
+        return ""
+    if isinstance(value, Enum):
+        value = value.value
+    return str(value).strip().upper()
 
 
-def _type_text(row: Dict[str, Any]) -> str:
-    """Prefer full_data_type (e.g. DECIMAL(10,2), ARRAY<STRING>) over
-    data_type (e.g. DECIMAL, ARRAY)."""
-    type_text = _get(row, "full_data_type") or _get(row, "data_type")
-    if not type_text:
-        raise UnsupportedFunctionError(f"Missing data type in row: {row}")
-    return str(type_text).strip()
+def _params(container: Any) -> List[FunctionParameterInfo]:
+    """Parameters of a FunctionParameterInfos, sorted by position."""
+    params = list(getattr(container, "parameters", None) or [])
+    return sorted(params, key=lambda p: p.position if p.position is not None else 0)
 
 
-def _sorted_by_position(rows: Optional[Iterable[Dict[str, Any]]]) -> List[Dict]:
-    return sorted(rows or [], key=lambda r: int(_get(r, "ordinal_position") or 0))
+def _type_text(param: FunctionParameterInfo) -> str:
+    if not param.type_text:
+        raise UnsupportedFunctionError(f"Missing type for parameter {param.name!r}")
+    return param.type_text.strip()
 
 
-def _column_list(rows: List[Dict[str, Any]], name_key: str, with_default: bool) -> str:
+def _column_list(params: List[FunctionParameterInfo], with_default: bool) -> str:
     parts = []
-    for row in rows:
-        name = _get(row, name_key)
-        if not name:
-            raise UnsupportedFunctionError(f"Missing {name_key} in row: {row}")
-        part = f"{quote_identifier(name)} {_type_text(row)}"
-        if with_default:
-            default = _get(row, "parameter_default")
-            if default is not None and str(default).strip() != "":
-                part += f" DEFAULT {str(default).strip()}"
-        comment = _get(row, "comment")
-        if comment:
-            part += f" COMMENT {quote_string(comment)}"
+    for p in params:
+        if not p.name:
+            raise UnsupportedFunctionError("Function parameter has no name")
+        part = f"{quote_identifier(p.name)} {_type_text(p)}"
+        if with_default and p.parameter_default not in (None, ""):
+            part += f" DEFAULT {str(p.parameter_default).strip()}"
+        if p.comment:
+            part += f" COMMENT {quote_string(p.comment)}"
         parts.append(part)
     return ", ".join(parts)
-
-
-def _is_table_function(routine: Dict[str, Any], result_columns: List[Dict]) -> bool:
-    data_type = str(_get(routine, "data_type") or "").strip().upper()
-    return data_type == "TABLE" or bool(result_columns)
-
-
-def _yes(value: Any) -> Optional[bool]:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().upper()
-    if text in ("YES", "TRUE", "Y"):
-        return True
-    if text in ("NO", "FALSE", "N"):
-        return False
-    return None
 
 
 def _strip_return_keyword(body: str) -> str:
@@ -100,25 +92,24 @@ def _strip_return_keyword(body: str) -> str:
 
 
 def build_create_function_ddl(
-    routine: Dict[str, Any],
-    parameters: Optional[Iterable[Dict[str, Any]]],
-    result_columns: Optional[Iterable[Dict[str, Any]]],
+    function: FunctionInfo,
     target_full_name: str,
     create_or_replace: bool = False,
+    catalog_map: Optional[Dict[str, str]] = None,
 ) -> str:
     """
-    Build a CREATE FUNCTION statement.
+    Build a CREATE FUNCTION statement from SDK function metadata.
 
     Args:
-        routine: information_schema.routines row as a dict.
-        parameters: information_schema.parameters rows for the function
-            (input parameters; rows with is_result = 'YES' are ignored).
-        result_columns: information_schema.routine_columns rows (result
-            columns of a table-valued function); empty for scalar functions.
+        function: ``FunctionInfo`` from ``WorkspaceClient.functions.get``.
         target_full_name: already-quoted target name, e.g.
             ```cat`.`sch`.`fn```.
         create_or_replace: emit CREATE OR REPLACE FUNCTION instead of
             CREATE FUNCTION IF NOT EXISTS.
+        catalog_map: source -> target catalog names; fully qualified
+            references in SQL bodies are rewritten with
+            ``sql_utils.rewrite_catalog_references``. Python bodies are not
+            rewritten.
 
     Returns:
         The CREATE FUNCTION DDL string.
@@ -127,15 +118,8 @@ def build_create_function_ddl(
         UnsupportedFunctionError: if the function kind or body cannot be
             replayed (e.g. unknown language, missing body).
     """
-    params = [
-        p
-        for p in _sorted_by_position(parameters)
-        if _yes(_get(p, "is_result")) is not True
-    ]
-    result_cols = _sorted_by_position(result_columns)
-
-    routine_body = str(_get(routine, "routine_body") or "SQL").strip().upper()
-    language = str(_get(routine, "external_language") or "").strip().upper()
+    routine_body = _enum_text(function.routine_body) or "SQL"
+    language = _enum_text(function.external_language)
     if routine_body == "SQL":
         language = "SQL"
     elif routine_body != "EXTERNAL" or language != "PYTHON":
@@ -144,7 +128,7 @@ def build_create_function_ddl(
             f"external_language={language or None}"
         )
 
-    definition = _get(routine, "routine_definition")
+    definition = function.routine_definition
     if definition is None or str(definition).strip() == "":
         raise UnsupportedFunctionError("Function has no routine_definition")
     definition = str(definition)
@@ -154,43 +138,42 @@ def build_create_function_ddl(
     else:
         header = f"CREATE FUNCTION IF NOT EXISTS {target_full_name}"
 
-    lines = [f"{header}({_column_list(params, 'parameter_name', with_default=True)})"]
+    params = _params(function.input_params)
+    lines = [f"{header}({_column_list(params, with_default=True)})"]
 
-    if _is_table_function(routine, result_cols):
+    if _enum_text(function.data_type) == "TABLE_TYPE":
+        result_cols = _params(function.return_params)
         if not result_cols:
-            raise UnsupportedFunctionError(
-                "Table-valued function has no result columns in routine_columns"
-            )
-        lines.append(
-            f"RETURNS TABLE ({_column_list(result_cols, 'column_name', with_default=False)})"
-        )
+            raise UnsupportedFunctionError("Table-valued function has no return_params")
+        lines.append(f"RETURNS TABLE ({_column_list(result_cols, with_default=False)})")
     else:
-        lines.append(f"RETURNS {_type_text(routine)}")
+        return_type = function.full_data_type or _enum_text(function.data_type)
+        if not return_type:
+            raise UnsupportedFunctionError("Function has no return type")
+        lines.append(f"RETURNS {str(return_type).strip()}")
 
     lines.append(f"LANGUAGE {language}")
 
-    deterministic = _yes(_get(routine, "is_deterministic"))
-    if deterministic is True:
+    if function.is_deterministic is True:
         lines.append("DETERMINISTIC")
-    elif deterministic is False:
+    elif function.is_deterministic is False:
         lines.append("NOT DETERMINISTIC")
 
-    comment = _get(routine, "comment")
-    if comment:
-        lines.append(f"COMMENT {quote_string(comment)}")
+    if function.comment:
+        lines.append(f"COMMENT {quote_string(function.comment)}")
 
     if language == "SQL":
-        data_access = str(_get(routine, "sql_data_access") or "").strip().upper()
-        # Only CONTAINS SQL and READS SQL DATA are valid in CREATE FUNCTION.
-        if data_access in ("CONTAINS SQL", "READS SQL DATA"):
+        data_access = _DATA_ACCESS_CLAUSES.get(_enum_text(function.sql_data_access))
+        if data_access:
             lines.append(data_access)
-        lines.append(f"RETURN {_strip_return_keyword(definition)}")
+        body = _strip_return_keyword(definition)
+        body = rewrite_catalog_references(body, catalog_map)
+        lines.append(f"RETURN {body}")
     else:
         if "$$" in definition:
             raise UnsupportedFunctionError(
                 "Python function body contains '$$' and cannot be wrapped in $$ ... $$"
             )
-        body = definition.strip("\n")
-        lines.append(f"AS $$\n{body}\n$$")
+        lines.append(f"AS $$\n{definition.strip(chr(10))}\n$$")
 
     return "\n".join(lines)

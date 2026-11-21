@@ -28,7 +28,7 @@ This system provides incremental data and UC metadata replication capabilities b
 | Tags | Supported | catalog, schema, table/view/SQL MV/SQL ST, columns, views, volume. Foreign tables and DLT-defined MV/ST are skipped (target does not exist) |
 | Column Comments | Supported | Supported for managed/external tables, views, and SQL streaming tables. Materialized views are skipped — declare column comments in the MV CREATE DDL or DLT pipeline instead |
 | Grants | Supported |  catalog, schema, table/view/SQL MV/SQL ST, volume, function. Per-securable, per-principal sync of UC privileges.  **Not replicated**: object ownership, row/column filters. Foreign tables and DLT-defined MV/ST are skipped (target does not exist). |
-| Functions | Supported | SQL scalar, SQL table-valued and Python UDFs. DDL is rebuilt from `information_schema.routines` / `parameters` / `routine_columns` (no `SHOW CREATE FUNCTION`). Replicated after schemas and before tables. Function grants via `function_grant`. Catalog references inside function bodies are not yet rewritten when the target catalog name differs from the source |
+| Functions | Supported | SQL scalar, SQL table-valued and Python UDFs. There is no `SHOW CREATE FUNCTION`, so DDL is rebuilt from the function metadata returned by the Databricks SDK (`functions.get`) and created with SQL `CREATE [OR REPLACE] FUNCTION`. Replicated after schemas and before tables. Function grants via `function_grant`. Catalog references in SQL function bodies are rewritten when the target catalog name differs from the source (Python bodies are replayed verbatim) |
 | Models | In Development |
 
 ### Data Replication

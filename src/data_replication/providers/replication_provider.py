@@ -3370,7 +3370,7 @@ class ReplicationProvider(BaseProvider):
 
     def _uc_replicate_functions(self, schema_config: SchemaConfig) -> List[RunResult]:
         """Replicate all UC functions in a schema by rebuilding their
-        CREATE FUNCTION DDL from the source information_schema."""
+        CREATE FUNCTION DDL from source metadata (Databricks SDK)."""
         function_names, results = self._list_source_functions(schema_config, "function")
         if function_names:
             self.logger.info(
@@ -3414,22 +3414,23 @@ class ReplicationProvider(BaseProvider):
             )
 
         try:
-            metadata = self.source_dbops.get_function_metadata(
+            function_info = self.source_dbops.get_function_info(
                 source_catalog, schema_name, function_name
             )
-            if metadata is None:
+            if function_info is None:
                 return _result(
                     "failed", f"Source function not found: {source_function}"
                 )
             try:
                 ddl = build_create_function_ddl(
-                    routine=metadata["routine"],
-                    parameters=metadata["parameters"],
-                    result_columns=metadata["result_columns"],
+                    function=function_info,
                     target_full_name=target_function,
                     create_or_replace=bool(
                         getattr(replication_config, "create_or_replace_function", True)
                     ),
+                    # Rewrite fully qualified references in SQL bodies when the
+                    # target catalog is renamed (same mapping as views/MV/ST).
+                    catalog_map=self._catalog_reference_map(replication_config),
                 )
             except UnsupportedFunctionError as e:
                 self.logger.warning(
@@ -3437,10 +3438,6 @@ class ReplicationProvider(BaseProvider):
                     extra={"run_id": self.run_id, "operation": "uc_replication"},
                 )
                 return _result("skipped", str(e))
-            # TODO(#37): when the target catalog name differs from
-            # source_catalog, rewrite catalog references in the function body
-            # with sql_rewrite.rewrite_catalog_references once #37 lands.
-            # Until then the body is replayed verbatim.
             details["step1_query"] = ddl
 
             @retry_with_logging(schema_config.retry, self.logger)
