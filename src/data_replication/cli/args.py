@@ -274,7 +274,8 @@ def setup_argument_parser():
         type=str,
         help="comma-separated list of UC metadata types to replicate. "
         "Acceptable values: all,catalog,catalog_tag,schema,schema_tag,"
-        "view,table,view_tag,table_tag,column_tag,volume,volume_tag,column_comment",
+        "view,table,view_tag,table_tag,column_tag,volume,volume_tag,column_comment,"
+        "function,function_grant",
     )
 
     parser.add_argument(

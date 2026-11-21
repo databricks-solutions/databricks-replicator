@@ -91,6 +91,8 @@ uc_object_types: [
     "volume",
     "volume_tag",
     "volume_grant",
+    "function",
+    "function_grant",
     "column_tag",
     "column_comment",
     "materialized_view",
@@ -168,9 +170,13 @@ replication_config:
   # Optional: whether to create or replace streaming table during UC streaming table replication. default is false.
   # Note: ST is created from source SHOW CREATE TABLE DDL (embeds COMMENTs/DEFAULTs on initial creation). Unlike MV, column_comment replication IS supported incrementally for ST via ALTER STREAMING TABLE.
   create_or_replace_streaming_table: false
+  # Optional: whether to create or replace function during UC function replication. default is true to use create or replace function.
+  # Set to false to use create function if not exists (existing target functions are left unchanged).
+  create_or_replace_function: true
   # Optional: whether to strip inline column masks (MASK fn) and row filters (WITH ROW FILTER fn ON (...)) from source table DDL before creating the target table. default is true.
-  # UC functions are not replicated yet, so the referenced functions usually do not exist on target and the CREATE would fail.
-  # WARNING: when stripped, the target table is created WITHOUT column masks / row filters. Set to false only if the functions already exist on target.
+  # The mask/filter functions must exist on target or the CREATE fails. UC function replication (uc object type "function") runs before tables,
+  # so set this to false when replicating functions to keep masks / row filters inline.
+  # WARNING: when stripped, the target table is created WITHOUT column masks / row filters.
   strip_inline_masks_and_row_filters: true
   # Optional: extra source -> target catalog renames applied to fully qualified references
   # (catalog.schema.object) inside replayed view / SQL MV / SQL ST bodies.

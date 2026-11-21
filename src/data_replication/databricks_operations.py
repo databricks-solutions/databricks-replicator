@@ -11,9 +11,11 @@ from typing import Iterator, List, Optional
 
 from databricks.connect import DatabricksSession
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import NotFound
 from databricks.sdk.service.catalog import (
     CatalogInfo,
     ExternalLocationInfo,
+    FunctionInfo,
     PermissionsChange,
     PrivilegeAssignment,
     SchemaInfo,
@@ -988,6 +990,54 @@ class DatabricksOperations:
         except Exception:
             # Schema might not exist or be accessible
             return []
+
+    @staticmethod
+    def _sql_literal(value: str) -> str:
+        return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+    def get_functions_in_schema(self, catalog_name: str, schema_name: str) -> List[str]:
+        """
+        Get names of all user-defined functions in a schema (Databricks SDK
+        ``functions.list``), sorted by name.
+
+        Raises:
+            Exception: if listing fails (callers decide how to report it).
+        """
+        if self.workspace_client is None:
+            raise ValueError("A WorkspaceClient is required to list functions")
+        return sorted(
+            f.name
+            for f in self.workspace_client.functions.list(catalog_name, schema_name)
+            if f.name
+        )
+
+    def get_function_info(
+        self, catalog_name: str, schema_name: str, function_name: str
+    ) -> Optional[FunctionInfo]:
+        """
+        Fetch a function's metadata (Databricks SDK ``functions.get``): input
+        parameters, return type / ``return_params``, body, language,
+        determinism and data access.
+
+        Returns:
+            The ``FunctionInfo``, or None if the function does not exist.
+        """
+        if self.workspace_client is None:
+            raise ValueError("A WorkspaceClient is required to read functions")
+        try:
+            return self.workspace_client.functions.get(
+                f"{catalog_name}.{schema_name}.{function_name}"
+            )
+        except NotFound:
+            return None
+
+    def if_function_exists(self, function_name: str) -> bool:
+        """Check if a function exists (function_name: catalog.schema.function)."""
+        try:
+            self.spark.sql(f"DESCRIBE FUNCTION {function_name}")
+            return True
+        except Exception:
+            return False
 
     def filter_volumes_by_type(
         self,
