@@ -48,6 +48,11 @@ from ..utils import (
 from .base_provider import BaseProvider
 
 
+def _escape_sql_string(value: str) -> str:
+    """Escape a value for use inside a single-quoted SQL string literal."""
+    return value.replace("\\", "\\\\").replace("'", "''")
+
+
 class ReplicationProvider(BaseProvider):
     """Provider for uc and data replication operations using deep clone and autoloader."""
 
@@ -1417,13 +1422,14 @@ class ReplicationProvider(BaseProvider):
                     return run_results
 
                 query = ""
+                escaped_comment = _escape_sql_string(source_comment)
                 if table_type.upper() == "VIEW":
                     query = f"""
-                    COMMENT ON VIEW {target_table} IS '{source_comment}'
+                    COMMENT ON VIEW {target_table} IS '{escaped_comment}'
                     """
                 if table_type.lower() in ["managed", "external"]:
                     query = f"""
-                    COMMENT ON TABLE {target_table} IS '{source_comment}'
+                    COMMENT ON TABLE {target_table} IS '{escaped_comment}'
                     """
 
                 # Execute the replication
@@ -2417,11 +2423,11 @@ class ReplicationProvider(BaseProvider):
             table_type = self.source_dbops.get_table_type(source_table)
 
             comment_list = [
-                f"`{k}` COMMENT '{v}'"
+                f"`{k}` COMMENT '{_escape_sql_string(v)}'"
                 for k, v in merged_comment_maps.items()
                 if v is not None
             ]
-            comment_str = ",".join(comment_list).replace("\\", "\\\\").replace("'", "'")
+            comment_str = ",".join(comment_list)
 
             if len(comment_list) > 0:
                 if (

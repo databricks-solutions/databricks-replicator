@@ -310,11 +310,6 @@ class TestTableComments:
         [r] = p._uc_replicate_table_comments("s", table_config())
         assert r.status == "failed" and r.error_message == "lookup"
 
-    @pytest.mark.xfail(
-        reason="bug: single quotes in a table comment are not escaped, so the "
-        "generated COMMENT ON statement is invalid SQL",
-        strict=True,
-    )
     def test_quote_in_comment_is_escaped(self):
         p = self._provider(src="owner's table")
         p._uc_replicate_table_comments("s", table_config())
@@ -400,11 +395,6 @@ class TestColumnComments:
         [r] = p._uc_replicate_column_comments("s", table_config())
         assert r.status == "failed" and r.error_message == "lookup"
 
-    @pytest.mark.xfail(
-        reason="bug: for managed/external tables the column comment string uses "
-        '.replace("\'", "\'") (a no-op), so single quotes are not escaped',
-        strict=True,
-    )
     def test_managed_table_escapes_quotes(self):
         p = self._provider(src=[{"a": "it's"}], tgt=[{"a": ""}])
         p._uc_replicate_column_comments("s", table_config())
