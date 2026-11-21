@@ -497,7 +497,9 @@ class ConfigLoader:
         config_path = Path(config_path)
 
         try:
-            config_dict = config.model_dump(exclude_none=True)
+            # mode="json" turns enums into plain values so yaml.safe_load can
+            # read the file back.
+            config_dict = config.model_dump(mode="json", exclude_none=True)
 
             with open(config_path, "w", encoding="utf-8") as f:
                 yaml.dump(config_dict, f, default_flow_style=False, indent=2)

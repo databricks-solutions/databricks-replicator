@@ -379,11 +379,6 @@ def test_save_config_writes_yaml(tmp_path):
     assert "catalog_name: c1" in text
 
 
-@pytest.mark.xfail(
-    reason="bug: save_to_file uses yaml.dump, which writes enums as "
-    "!!python/object tags that load_from_file (yaml.safe_load) cannot read",
-    strict=True,
-)
 def test_load_config_and_save_config_roundtrip(tmp_path):
     path = _write(tmp_path, _cfg())
     config = load_config(path)
