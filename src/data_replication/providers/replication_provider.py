@@ -48,6 +48,11 @@ from ..utils import (
 from .base_provider import BaseProvider
 
 
+def _escape_sql_string(value: str) -> str:
+    """Escape a value for use inside a single-quoted SQL string literal."""
+    return value.replace("\\", "\\\\").replace("'", "''")
+
+
 class ReplicationProvider(BaseProvider):
     """Provider for uc and data replication operations using deep clone and autoloader."""
 
@@ -1045,7 +1050,8 @@ class ReplicationProvider(BaseProvider):
                     operation_type="replication",
                     catalog_name=target_catalog,
                     schema_name=schema_name,
-                    volume_name=volume_name,
+                    object_name=volume_name,
+                    object_type="volume",
                     status="failed",
                     start_time=start_time.isoformat(),
                     end_time=end_time.isoformat(),
@@ -1075,7 +1081,8 @@ class ReplicationProvider(BaseProvider):
                     operation_type="replication",
                     catalog_name=target_catalog,
                     schema_name=schema_name,
-                    volume_name=volume_name,
+                    object_name=volume_name,
+                    object_type="volume",
                     status="failed",
                     start_time=start_time.isoformat(),
                     end_time=end_time.isoformat(),
@@ -1415,13 +1422,14 @@ class ReplicationProvider(BaseProvider):
                     return run_results
 
                 query = ""
+                escaped_comment = _escape_sql_string(source_comment)
                 if table_type.upper() == "VIEW":
                     query = f"""
-                    COMMENT ON VIEW {target_table} IS '{source_comment}'
+                    COMMENT ON VIEW {target_table} IS '{escaped_comment}'
                     """
                 if table_type.lower() in ["managed", "external"]:
                     query = f"""
-                    COMMENT ON TABLE {target_table} IS '{source_comment}'
+                    COMMENT ON TABLE {target_table} IS '{escaped_comment}'
                     """
 
                 # Execute the replication
@@ -1763,6 +1771,10 @@ class ReplicationProvider(BaseProvider):
         attempt = 1
         max_attempts = table_config.retry.max_attempts
         last_exception = None
+        # Initialised before the try so the failure path can report them even
+        # when the tag lookup itself raises.
+        column_with_tags_in_source = 0
+        column_with_tags_in_target = 0
 
         run_results = []
 
@@ -2411,11 +2423,11 @@ class ReplicationProvider(BaseProvider):
             table_type = self.source_dbops.get_table_type(source_table)
 
             comment_list = [
-                f"`{k}` COMMENT '{v}'"
+                f"`{k}` COMMENT '{_escape_sql_string(v)}'"
                 for k, v in merged_comment_maps.items()
                 if v is not None
             ]
-            comment_str = ",".join(comment_list).replace("\\", "\\\\").replace("'", "'")
+            comment_str = ",".join(comment_list)
 
             if len(comment_list) > 0:
                 if (
@@ -2593,6 +2605,9 @@ class ReplicationProvider(BaseProvider):
         # Get source table type to determine replication strategy
         source_table_type = self.db_ops.get_table_type(source_table)
 
+        # Initialised before the try so the failure path can report it even
+        # when the error happens before any replication attempt.
+        attempt = 1
         try:
             self.logger.info(
                 f"Starting replication: {source_table} -> {target_table}",
@@ -2974,6 +2989,9 @@ class ReplicationProvider(BaseProvider):
                 )
             ]
 
+        # Initialised before the try so the failure path can report it even
+        # when the error happens before any replication attempt.
+        attempt = 1
         try:
             self.logger.info(
                 f"Starting replication: {source_table} -> {target_table} with SQL warehouse {self.target_databricks_config.warehouse_id}",
