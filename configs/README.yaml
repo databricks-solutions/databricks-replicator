@@ -168,6 +168,10 @@ replication_config:
   # Optional: whether to create or replace streaming table during UC streaming table replication. default is false.
   # Note: ST is created from source SHOW CREATE TABLE DDL (embeds COMMENTs/DEFAULTs on initial creation). Unlike MV, column_comment replication IS supported incrementally for ST via ALTER STREAMING TABLE.
   create_or_replace_streaming_table: false
+  # Optional: whether to strip inline column masks (MASK fn) and row filters (WITH ROW FILTER fn ON (...)) from source table DDL before creating the target table. default is true.
+  # UC functions are not replicated yet, so the referenced functions usually do not exist on target and the CREATE would fail.
+  # WARNING: when stripped, the target table is created WITHOUT column masks / row filters. Set to false only if the functions already exist on target.
+  strip_inline_masks_and_row_filters: true
   # Optional: whether to overwrite tags during replication. default is true.
   # Tag replication applies to catalog, schema, table/view/SQL MV/SQL ST, column, and volume. Foreign tables and DLT-defined MV/ST are skipped because the target object does not exist.
   overwrite_tags: true
