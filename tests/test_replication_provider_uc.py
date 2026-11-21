@@ -52,8 +52,9 @@ class TestUcReplicateDdl:
         p.source_dbops.show_create_table_ddl.return_value = VIEW_DDL
         [r] = p._uc_replicate_ddl("s", table_config())
         assert r.status == "success" and r.object_type == "view"
+        # The source catalog in the view body is rewritten to the target (#49).
         assert r.details["step1_query"] == (
-            "CREATE OR REPLACE VIEW `tgt`.`s`.`t` (\n  a)\nAS SELECT a FROM src.s.base"
+            "CREATE OR REPLACE VIEW `tgt`.`s`.`t` (\n  a)\nAS SELECT a FROM tgt.s.base"
         )
         assert sql_calls(p.target_spark) == [r.details["step1_query"]]
 
