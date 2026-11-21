@@ -1187,7 +1187,9 @@ class BaseProvider(ABC):
 
             return target_schemas
 
-        # Process all schemas
+        # Process all schemas. With a schema_table_filter_expression, schemas
+        # come only from the filter's matches, so no matches means no schemas.
+        schema_list = []
         if not self.catalog_config.schema_table_filter_expression:
             schema_list = self.db_ops.get_all_schemas(self.catalog_name)
 

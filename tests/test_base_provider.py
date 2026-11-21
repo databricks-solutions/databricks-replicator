@@ -368,14 +368,6 @@ class TestProcessCatalogOrchestration:
         assert isinstance(results[0], RunResult)
         assert results[0].status == "failed"
 
-    @pytest.mark.xfail(
-        reason=(
-            "bug: a schema_table_filter_expression that matches no tables leaves "
-            "target_schemas empty, and _get_schemas then reads an unassigned "
-            "schema_list (UnboundLocalError)"
-        ),
-        strict=True,
-    )
     def test_filter_expression_with_no_matches_is_a_noop(self):
         p = _provider(schema_table_filter_expression="table_name = 'missing'")
         p.db_ops.get_schema_tables_by_filter.return_value = []
