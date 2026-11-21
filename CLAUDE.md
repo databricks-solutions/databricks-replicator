@@ -4,7 +4,7 @@ Databricks replicator: replicates Unity Catalog metadata and data between worksp
 
 ## Commands
 - Setup: `make setup` (creates `.venv`; Python 3.12, required by databricks-connect 17.1).
-- Tests: `pytest` (config in `pytest.ini`). CI gates coverage at 35%; `pytest.ini` says 70% — use `pytest --cov-fail-under=35` locally until #53 lands.
+- Tests: `pytest` (config in `pytest.ini`, which also sets the 90% coverage minimum CI enforces).
 - Checks (same as CI): `make quality` = `ruff check .` + `ruff format --check .` + `mypy` (mypy is report-only, ~590 known errors). Auto-fix: `make fix`.
 - Validate a config without connecting: `data-replicator <config.yaml> --validate-only`.
 
