@@ -1,0 +1,30 @@
+# Tool configuration only; packaging is still defined in setup.py.
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["scratch", "build", "dist", "htmlcov", "terraform*"]
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: isort.
+select = ["E", "F", "W", "I"]
+# Line length is handled by `ruff format`; the remaining long lines are
+# strings/SQL that the formatter does not split.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# main.py extends sys.path before importing the package (Databricks workspace runs).
+"src/data_replication/main.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["data_replication"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["data_replication"]
+ignore_missing_imports = true
+# Report-only for now: CI runs mypy without failing the build until the
+# existing errors are paid down.
+check_untyped_defs = false
