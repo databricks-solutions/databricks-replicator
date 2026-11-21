@@ -142,9 +142,7 @@ def _qualified_parts_after(tokens: List[Tuple[str, str]], i: int) -> int:
         j += 1
 
 
-def rewrite_catalog_references(
-    sql: str, catalog_map: Optional[Dict[str, str]]
-) -> str:
+def rewrite_catalog_references(sql: str, catalog_map: Optional[Dict[str, str]]) -> str:
     """Rewrite catalog names in fully qualified object references.
 
     An identifier is treated as a catalog reference only when it is the first

@@ -88,7 +88,9 @@ def test_multi_catalog_mapping():
 
 def test_no_chained_rewrites():
     assert (
-        rewrite_catalog_references("SELECT * FROM a.s.t JOIN b.s.u", {"a": "b", "b": "c"})
+        rewrite_catalog_references(
+            "SELECT * FROM a.s.t JOIN b.s.u", {"a": "b", "b": "c"}
+        )
         == "SELECT * FROM b.s.t JOIN c.s.u"
     )
 
@@ -167,7 +169,9 @@ def test_view_with_same_catalog_is_unchanged():
         _config(source_catalog="tgt", create_or_replace_view=False),
     )
     assert queries == [
-        ddl.replace("CREATE VIEW `tgt`.`sch`.`v` ", "CREATE VIEW IF NOT EXISTS `tgt`.`sch`.`v` ")
+        ddl.replace(
+            "CREATE VIEW `tgt`.`sch`.`v` ", "CREATE VIEW IF NOT EXISTS `tgt`.`sch`.`v` "
+        )
     ]
 
 

@@ -8,6 +8,7 @@ the YAML configuration file for the data replication system.
 from copy import deepcopy
 from enum import Enum
 from typing import Dict, List, Optional
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from data_replication.utils import merge_models_recursive, recursive_substitute
@@ -208,6 +209,7 @@ class DatabricksConnectConfig(BaseModel):
     cluster_id: Optional[str] = None
     warehouse_id: Optional[str] = None
     warehouse_config: Optional[WarehouseConfig] = None
+
 
 class BackupConfig(BaseModel):
     """Configuration for backup operations."""

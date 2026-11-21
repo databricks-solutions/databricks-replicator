@@ -17,9 +17,7 @@ setup(
     version="1.0.0" + "+" + "test",
     url="https://databricks.com",
     description="Data replication system for Databricks tables",
-    long_description=Path("README.md").read_text(
-        encoding="utf-8"
-    ),
+    long_description=Path("README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     packages=find_packages(where="./src"),
     package_dir={"": "src/"},
@@ -33,7 +31,7 @@ setup(
         "pydantic>=2.0.0",
         "databricks-sdk>=0.67.0",
         "setuptools",
-        "wheel"
+        "wheel",
     ],
     extras_require={
         "dev": [
@@ -49,5 +47,5 @@ setup(
             "coverage>=7.0.0",
         ],
     },
-    python_requires=">=3.8"
+    python_requires=">=3.8",
 )

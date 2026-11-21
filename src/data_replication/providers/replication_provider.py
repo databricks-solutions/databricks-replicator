@@ -5,15 +5,18 @@ This module handles replication operations with support for deep clone,
 streaming tables, materialized views, and intermediate catalogs.
 """
 
-from time import sleep
-from datetime import datetime, timezone
 import re
+from datetime import datetime, timezone
+from time import sleep
 from typing import Dict, List
 
-from databricks.sdk.service.sql import Disposition
-from databricks.sdk.service.sql import StatementState
-from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
 from databricks.sdk.service.catalog import VolumeType
+from databricks.sdk.service.sql import (
+    Disposition,
+    ExecuteStatementRequestOnWaitTimeout,
+    StatementState,
+)
+
 from data_replication.databricks_operations import DatabricksOperations
 
 # from delta.tables import DeltaTable
@@ -25,9 +28,15 @@ from ..config.models import (
     UCObjectType,
     VolumeConfig,
 )
+from ..constants import (
+    DICT_FOR_CREATION_VOLUME,
+    DICT_FOR_UPDATE_VOLUME,
+)
 from ..exceptions import ReplicationError, TableNotFoundError
 from ..sql_rewrite import rewrite_catalog_references
 from ..utils import (
+    create_spark_session,
+    create_workspace_client,
     filter_common_maps,
     get_workspace_url_from_host,
     map_cloud_url,
@@ -35,13 +44,7 @@ from ..utils import (
     recursive_substitute,
     replace_cloud_url,
     retry_with_logging,
-    create_spark_session,
     validate_spark_session,
-    create_workspace_client,
-)
-from ..constants import (
-    DICT_FOR_CREATION_VOLUME,
-    DICT_FOR_UPDATE_VOLUME,
 )
 from .base_provider import BaseProvider
 
