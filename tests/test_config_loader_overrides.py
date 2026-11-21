@@ -82,12 +82,6 @@ class TestEnvironmentMerge:
         config = _load(_write(tmp_path, cfg))
         assert config.cloud_url_mapping == {"abfss://a/": "s3://b/"}
 
-    @pytest.mark.xfail(
-        reason="bug: environment is merged with model_dump() (no exclude_unset), "
-        "so defaults of fields not written in environments.yaml overwrite values "
-        "set explicitly in the main config",
-        strict=True,
-    )
     def test_env_defaults_do_not_override_explicit_config_values(self, tmp_path):
         cfg = _cfg(
             audit_config={"audit_table": "cfg.sch.tbl", "logging_workspace": "source"}
@@ -248,19 +242,10 @@ class TestTargetOverrides:
             "table_name like 'f_%'"
         }
 
-    @pytest.mark.xfail(
-        reason="bug: loader raises pydantic ValidationError(str), which is a "
-        "TypeError in pydantic v2, so invalid names escape as TypeError",
-        strict=True,
-    )
     def test_invalid_catalog_name_raises_configuration_error(self, tmp_path):
         with pytest.raises(ConfigurationError):
             _load(_write(tmp_path, _cfg()), target_catalog_override="bad name!")
 
-    @pytest.mark.xfail(
-        reason="bug: loader raises pydantic ValidationError(str) -> TypeError",
-        strict=True,
-    )
     def test_invalid_schema_name_raises_configuration_error(self, tmp_path):
         with pytest.raises(ConfigurationError):
             _load(_write(tmp_path, _cfg()), target_schemas_override="bad;schema")
@@ -306,10 +291,6 @@ class TestScalarOverrides:
         assert config.logging.level == "warning"
         assert config.logging.format == "json"
 
-    @pytest.mark.xfail(
-        reason="bug: loader raises pydantic ValidationError(str) -> TypeError",
-        strict=True,
-    )
     def test_invalid_logging_level_raises_configuration_error(self, tmp_path):
         with pytest.raises(ConfigurationError):
             _load(_write(tmp_path, _cfg()), logging_level_override="LOUD")
@@ -327,10 +308,6 @@ class TestScalarOverrides:
             config.target_databricks_connect_config.host == "https://tgt2.example.com/"
         )
 
-    @pytest.mark.xfail(
-        reason="bug: loader raises pydantic ValidationError(str) -> TypeError",
-        strict=True,
-    )
     @pytest.mark.parametrize("kw", ["source_host_override", "target_host_override"])
     def test_host_override_without_scheme_raises_configuration_error(
         self, tmp_path, kw
@@ -402,11 +379,6 @@ def test_save_config_writes_yaml(tmp_path):
     assert "catalog_name: c1" in text
 
 
-@pytest.mark.xfail(
-    reason="bug: save_to_file uses yaml.dump, which writes enums as "
-    "!!python/object tags that load_from_file (yaml.safe_load) cannot read",
-    strict=True,
-)
 def test_load_config_and_save_config_roundtrip(tmp_path):
     path = _write(tmp_path, _cfg())
     config = load_config(path)

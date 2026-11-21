@@ -353,12 +353,6 @@ class TestReconcileTable:
             assert p.process_table(_schema(), _table()) == []
         p.audit_logger.log_results.assert_not_called()
 
-    @pytest.mark.xfail(
-        reason="bug: _get_filtered_table_reference reads the catalog-level "
-        "reconciliation_config, so table-level filters and {{table_name}} "
-        "substitution never reach the SQL (docs: table level takes precedence)",
-        strict=True,
-    )
     def test_table_level_filter_with_substitution_is_applied(self):
         spark = FakeSpark()
         p = _provider(spark)
@@ -512,11 +506,6 @@ class TestMissingDataCheck:
         assert "Missing data check failed" in out["error"]
         assert out["attempt"] == 1
 
-    @pytest.mark.xfail(
-        reason="bug: if get_common_fields raises, the except block reads `attempt` "
-        "before assignment, so an UnboundLocalError hides the real error",
-        strict=True,
-    )
     def test_common_fields_error_is_reported(self):
         spark = FakeSpark()
         p = _provider(spark)
