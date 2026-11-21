@@ -277,6 +277,7 @@ class ReplicationConfig(BaseModel):
     overwrite_comments: Optional[bool] = True
     overwrite_grants: Optional[bool] = False
     replicate_as_managed: Optional[bool] = False
+    strip_inline_masks_and_row_filters: Optional[bool] = True
     copy_files: Optional[bool] = True
     volume_config: Optional["VolumeFilesReplicationConfig"] = None
 
