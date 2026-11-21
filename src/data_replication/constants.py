@@ -2,6 +2,8 @@
 global constants
 """
 
+from typing import Tuple
+
 DICT_FOR_CREATION_CATALOG = {
     "name": None,
     "comment": None,
@@ -102,3 +104,22 @@ DICT_FOR_UPDATE_VOLUME = {
 }
 
 SKIP_PROCESSED_TABLES = True
+
+# Table properties that are derived by the Delta engine and cannot (or should
+# not) be replayed in a CREATE statement. Matching is case-insensitive. Entries
+# ending in "*" match any key with that prefix.
+UNREPLAYABLE_TBLPROPERTIES: Tuple[str, ...] = (
+    # Protocol versions are derived from the enabled table features.
+    "delta.minReaderVersion",
+    "delta.minWriterVersion",
+    # Row tracking: the materialized column names are assigned by the engine.
+    "delta.rowTracking.materializedRowIdColumnName",
+    "delta.rowTracking.materializedRowCommitVersionColumnName",
+    # Column mapping: the max column id is maintained by the engine.
+    "delta.columnMapping.maxColumnId",
+    # Liquid clustering columns are expressed via CLUSTER BY instead.
+    "clusteringColumns",
+    # Commit metadata surfaced on some (e.g. shared) tables.
+    "delta.lastCommitTimestamp",
+    "delta.lastUpdateVersion",
+)
