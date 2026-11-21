@@ -135,11 +135,6 @@ class TestUcReplicateDdl:
             == "CREATE TABLE IF NOT EXISTS `tgt`.`s`.`t` (a INT)"
         )
 
-    @pytest.mark.xfail(
-        reason="bug: the except branch of _uc_replicate_ddl reads `attempt`, which is "
-        "unbound when SHOW CREATE TABLE fails, so UnboundLocalError escapes",
-        strict=True,
-    )
     def test_show_create_failure_returns_failed_result(self):
         p = _uc_provider()
         p.db_ops.get_table_type.return_value = "VIEW"
@@ -234,11 +229,6 @@ class TestUcReplicateSqlStMv:
         assert "SQL definition not found" in r.error_message
         se.execute_statement.assert_not_called()
 
-    @pytest.mark.xfail(
-        reason="bug: the except branch of _uc_replicate_sql_st_mv reads `attempt`, "
-        "which is unbound when SHOW CREATE TABLE fails, so UnboundLocalError escapes",
-        strict=True,
-    )
     def test_show_create_failure_returns_failed_result(self):
         p, _ = self._provider("MATERIALIZED_VIEW")
         p.source_dbops.show_create_table_ddl.side_effect = RuntimeError("denied")

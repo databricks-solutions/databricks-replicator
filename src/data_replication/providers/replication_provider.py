@@ -2595,6 +2595,9 @@ class ReplicationProvider(BaseProvider):
         # Get source table type to determine replication strategy
         source_table_type = self.db_ops.get_table_type(source_table)
 
+        # Initialised before the try so the failure path can report it even
+        # when the error happens before any replication attempt.
+        attempt = 1
         try:
             self.logger.info(
                 f"Starting replication: {source_table} -> {target_table}",
@@ -2976,6 +2979,9 @@ class ReplicationProvider(BaseProvider):
                 )
             ]
 
+        # Initialised before the try so the failure path can report it even
+        # when the error happens before any replication attempt.
+        attempt = 1
         try:
             self.logger.info(
                 f"Starting replication: {source_table} -> {target_table} with SQL warehouse {self.target_databricks_config.warehouse_id}",
