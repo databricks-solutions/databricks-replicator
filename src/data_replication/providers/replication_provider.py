@@ -8,7 +8,7 @@ streaming tables, materialized views, and intermediate catalogs.
 import re
 from datetime import datetime, timezone
 from time import sleep
-from typing import List
+from typing import Dict, List
 
 from databricks.sdk.service.catalog import VolumeType
 from databricks.sdk.service.sql import (
@@ -33,6 +33,7 @@ from ..constants import (
     DICT_FOR_UPDATE_VOLUME,
 )
 from ..exceptions import ReplicationError, TableNotFoundError
+from ..sql_rewrite import rewrite_catalog_references
 from ..utils import (
     create_spark_session,
     create_workspace_client,
@@ -2777,6 +2778,24 @@ class ReplicationProvider(BaseProvider):
                 )
             ]
 
+    def _catalog_reference_map(self, replication_config) -> Dict[str, str]:
+        """
+        Build the source -> target catalog mapping used to rewrite fully
+        qualified references inside replayed view / MV / ST bodies.
+
+        Includes source_catalog -> target catalog_name (when they differ) plus
+        any entries from replication_config.catalog_reference_mapping.
+        """
+        mapping: Dict[str, str] = {}
+        extra = getattr(replication_config, "catalog_reference_mapping", None)
+        if extra:
+            mapping.update(extra)
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+        if source_catalog and target_catalog:
+            mapping[source_catalog] = target_catalog
+        return mapping
+
     def _uc_replicate_view(
         self,
         source_table: str,
@@ -2807,6 +2826,9 @@ class ReplicationProvider(BaseProvider):
         attempt = 1
 
         view_stmt = self.source_dbops.show_create_table_ddl(source_table)
+        view_stmt = rewrite_catalog_references(
+            view_stmt, self._catalog_reference_map(replication_config)
+        )
 
         if replication_config.create_or_replace_view:
             step1_query = view_stmt.replace(
@@ -3159,6 +3181,9 @@ class ReplicationProvider(BaseProvider):
         step1_query = None
         attempt = 1
         table_stmt = self.source_dbops.show_create_table_ddl(source_table)
+        table_stmt = rewrite_catalog_references(
+            table_stmt, self._catalog_reference_map(replication_config)
+        )
 
         if replication_config.create_or_replace_materialized_view:
             step1_query = table_stmt.replace(
@@ -3207,6 +3232,9 @@ class ReplicationProvider(BaseProvider):
         step1_query = None
         attempt = 1
         table_stmt = self.source_dbops.show_create_table_ddl(source_table)
+        table_stmt = rewrite_catalog_references(
+            table_stmt, self._catalog_reference_map(replication_config)
+        )
 
         if replication_config.create_or_replace_streaming_table:
             step1_query = table_stmt.replace(

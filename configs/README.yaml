@@ -168,6 +168,12 @@ replication_config:
   # Optional: whether to create or replace streaming table during UC streaming table replication. default is false.
   # Note: ST is created from source SHOW CREATE TABLE DDL (embeds COMMENTs/DEFAULTs on initial creation). Unlike MV, column_comment replication IS supported incrementally for ST via ALTER STREAMING TABLE.
   create_or_replace_streaming_table: false
+  # Optional: extra source -> target catalog renames applied to fully qualified references
+  # (catalog.schema.object) inside replayed view / SQL MV / SQL ST bodies.
+  # source_catalog -> catalog_name is always applied when the names differ; add entries here for
+  # views that also reference other replicated catalogs. String literals and comments are not rewritten.
+  # catalog_reference_mapping:
+  #   other_source_catalog: other_target_catalog
   # Optional: whether to overwrite tags during replication. default is true.
   # Tag replication applies to catalog, schema, table/view/SQL MV/SQL ST, column, and volume. Foreign tables and DLT-defined MV/ST are skipped because the target object does not exist.
   overwrite_tags: true
