@@ -519,14 +519,6 @@ class TestConcurrentProcessing:
             statuses = {r.object_name: r.status for r in results}
             assert statuses == {"good": "success", "half": "failed", "bad": "failed"}
 
-    @pytest.mark.xfail(
-        reason=(
-            "bug: concurrency.timeout_seconds is never enforced; as_completed() "
-            "only yields finished futures, so future.result(timeout=...) cannot "
-            "time out and a slow object runs to completion"
-        ),
-        strict=True,
-    )
     def test_slow_table_exceeding_timeout_is_failed(self):
         p = _provider()
         p.timeout_seconds = 0.05
@@ -542,6 +534,41 @@ class TestConcurrentProcessing:
 
         assert results[0].status == "failed"
         assert "Timeout" in results[0].error_message
+
+    def test_timeout_counts_from_start_not_queue_and_does_not_block(self):
+        # One worker: "fast" waits in the queue behind "slow". Its clock must
+        # start when it runs, and the run must not wait for the timed-out
+        # worker to finish.
+        p = _provider()
+        p.timeout_seconds = 0.2
+
+        def work(schema_config, table_config):
+            if table_config.table_name == "slow":
+                time.sleep(1.0)
+            else:
+                time.sleep(0.1)
+            return [_rr(table_config.table_name)]
+
+        p.process_table = work
+        schema = SchemaConfig(
+            schema_name="s1", concurrency=ConcurrencyConfig(max_workers=1)
+        )
+
+        started = time.monotonic()
+        results = p._process_tables(
+            schema,
+            [TableConfig(table_name="slow"), TableConfig(table_name="fast")],
+            "c",
+            None,
+        )
+        elapsed = time.monotonic() - started
+
+        statuses = {r.object_name: r.status for r in results}
+        assert statuses["slow"] == "failed"
+        # "fast" starts once "slow" times out (the stuck worker no longer
+        # counts against max_workers) and its own clock starts then.
+        assert statuses["fast"] == "success"
+        assert elapsed < 1.0
 
 
 # --------------------------------------------------------------------------- #

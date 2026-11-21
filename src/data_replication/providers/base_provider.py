@@ -7,8 +7,10 @@ provider types like backup, replication, and reconciliation.
 
 import random
 import re
+import time
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -60,6 +62,13 @@ from ..exceptions import (
     ReplicationError,
     SparkSessionError,
 )
+
+
+class _TimedOutFuture:
+    """Stand-in for a future that exceeded concurrency.timeout_seconds."""
+
+    def result(self, timeout=None):
+        raise FuturesTimeoutError()
 
 
 class BaseProvider(ABC):
@@ -131,6 +140,61 @@ class BaseProvider(ABC):
         Setup operation-specific catalogs. Override in subclasses as needed.
         Default implementation does nothing.
         """
+
+    def _iter_completed_with_timeout(self, fn, items, max_workers):
+        """
+        Run fn(*args) for each (key, args) in items, at most max_workers at a
+        time, and yield (key, future) as each object finishes.
+
+        concurrency.timeout_seconds (self.timeout_seconds) is enforced per
+        object, measured from when it starts running (not while queued). An
+        object that runs past the timeout is yielded with a future whose
+        result() raises FuturesTimeoutError, so callers record it as a failed
+        result. It stops counting against max_workers, so queued objects
+        proceed and the run never waits on it.
+
+        Python threads cannot be killed: a timed-out worker keeps running in
+        the background until its call returns (e.g. the Spark statement
+        finishes), and interpreter exit still waits for it.
+        """
+        items = list(items)
+        if not items:
+            return
+        timeout = self.timeout_seconds
+        poll = min(max(timeout / 10, 0.01), 5.0) if timeout else None
+        # Concurrency is capped below by `running`; the pool itself is sized
+        # so timed-out workers never block queued objects from starting.
+        executor = ThreadPoolExecutor(max_workers=len(items))
+        queue = deque(items)
+        future_to_key = {}
+        start_times = {}
+        running = set()
+        try:
+            while queue or running:
+                while queue and len(running) < max_workers:
+                    key, args = queue.popleft()
+                    future = executor.submit(fn, *args)
+                    future_to_key[future] = key
+                    start_times[future] = time.monotonic()
+                    running.add(future)
+
+                done, _ = wait(running, timeout=poll, return_when=FIRST_COMPLETED)
+                for future in done:
+                    running.discard(future)
+                    yield future_to_key[future], future
+
+                if timeout:
+                    now = time.monotonic()
+                    expired = [
+                        future
+                        for future in running
+                        if now - start_times[future] > timeout
+                    ]
+                    for future in expired:
+                        running.discard(future)
+                        yield future_to_key[future], _TimedOutFuture()
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def _handle_exception(
         self,
@@ -723,52 +787,52 @@ class BaseProvider(ABC):
             f"Tables: {[f'{item["schema_config"].schema_name}.{item["table_config"].table_name}' for item in schema_table_list]}"
         )
 
-        with ThreadPoolExecutor(max_workers=concurrency.max_workers) as executor:
-            # Submit table processing jobs
-            future_to_table = {
-                executor.submit(
-                    self.process_table, item["schema_config"], item["table_config"]
-                ): (item["schema_config"].schema_name, item["table_config"].table_name)
-                for item in schema_table_list
-            }
+        items = [
+            (
+                (
+                    item["schema_config"].schema_name,
+                    item["table_config"].table_name,
+                ),
+                (item["schema_config"], item["table_config"]),
+            )
+            for item in schema_table_list
+        ]
+        # Collect table results as they finish (timeout enforced per table)
+        for (schema_name, table_name), future in self._iter_completed_with_timeout(
+            self.process_table, items, concurrency.max_workers
+        ):
+            try:
+                result = []
+                result = future.result()
 
-            # Collect table results
-            for future in as_completed(future_to_table):
-                schema_name, table_name = future_to_table[future]
-                try:
-                    result = []
-                    result = future.result(timeout=self.timeout_seconds)
-
-                    results.extend(result)
-                    # Check if any result in the list failed
-                    for single_result in result:
-                        if single_result.status == "failed":
-                            self.logger.error(
-                                f"{single_result.status} to {single_result.operation_type} {single_result.object_type} "
-                                f"{catalog_name}.{schema_name}.{table_name}: "
-                                f"{single_result.error_message}"
-                            )
-                        if single_result.status == "skipped":
-                            self.logger.warning(
-                                f"{single_result.status} {single_result.operation_type} {single_result.object_type} "
-                                f"{catalog_name}.{schema_name}.{table_name}: "
-                                f"{single_result.error_message}"
-                            )
-                except Exception as e:
-                    result = self._handle_exception(
-                        e,
-                        "processing table",
-                        catalog_name,
-                        schema_name,
-                        table_name,
-                        "table",
-                        start_time,
-                    )
-                    results.extend(result)
-                finally:
-                    self.processed_objects.append(f"{schema_name}.{table_name}")
-
-        executor.shutdown(wait=True)
+                results.extend(result)
+                # Check if any result in the list failed
+                for single_result in result:
+                    if single_result.status == "failed":
+                        self.logger.error(
+                            f"{single_result.status} to {single_result.operation_type} {single_result.object_type} "
+                            f"{catalog_name}.{schema_name}.{table_name}: "
+                            f"{single_result.error_message}"
+                        )
+                    if single_result.status == "skipped":
+                        self.logger.warning(
+                            f"{single_result.status} {single_result.operation_type} {single_result.object_type} "
+                            f"{catalog_name}.{schema_name}.{table_name}: "
+                            f"{single_result.error_message}"
+                        )
+            except Exception as e:
+                result = self._handle_exception(
+                    e,
+                    "processing table",
+                    catalog_name,
+                    schema_name,
+                    table_name,
+                    "table",
+                    start_time,
+                )
+                results.extend(result)
+            finally:
+                self.processed_objects.append(f"{schema_name}.{table_name}")
 
         self.logger.info(f"All tables processed in catalog {self.catalog_name}")
         return results
@@ -799,49 +863,49 @@ class BaseProvider(ABC):
             f"Volumes: {[f'{item["schema_config"].schema_name}.{item["volume_config"].volume_name}' for item in schema_volume_list]}"
         )
 
-        with ThreadPoolExecutor(max_workers=concurrency.max_workers) as executor:
-            # Submit volume processing jobs
-            future_to_volume = {
-                executor.submit(
-                    self.process_volume, item["schema_config"], item["volume_config"]
-                ): (
+        items = [
+            (
+                (
                     item["schema_config"].schema_name,
                     item["volume_config"].volume_name,
+                ),
+                (item["schema_config"], item["volume_config"]),
+            )
+            for item in schema_volume_list
+        ]
+        # Collect volume results as they finish (timeout enforced per volume)
+        for (
+            schema_name,
+            volume_name,
+        ), future in self._iter_completed_with_timeout(
+            self.process_volume, items, concurrency.max_workers
+        ):
+            try:
+                result = []
+                result = future.result()
+
+                results.extend(result)
+                # Check if any result in the list failed
+                for single_result in result:
+                    if single_result.status != "success":
+                        self.logger.error(
+                            f"Failed to process volume "
+                            f"{catalog_name}.{schema_name}.{volume_name}: "
+                            f"{single_result.error_message}"
+                        )
+            except Exception as e:
+                result = self._handle_exception(
+                    e,
+                    "processing volume",
+                    catalog_name,
+                    schema_name,
+                    volume_name,
+                    "volume",
+                    start_time,
                 )
-                for item in schema_volume_list
-            }
-
-            # Collect volume results
-            for future in as_completed(future_to_volume):
-                schema_name, volume_name = future_to_volume[future]
-                try:
-                    result = []
-                    result = future.result(timeout=self.timeout_seconds)
-
-                    results.extend(result)
-                    # Check if any result in the list failed
-                    for single_result in result:
-                        if single_result.status != "success":
-                            self.logger.error(
-                                f"Failed to process volume "
-                                f"{catalog_name}.{schema_name}.{volume_name}: "
-                                f"{single_result.error_message}"
-                            )
-                except Exception as e:
-                    result = self._handle_exception(
-                        e,
-                        "processing volume",
-                        catalog_name,
-                        schema_name,
-                        volume_name,
-                        "volume",
-                        start_time,
-                    )
-                    results.extend(result)
-                finally:
-                    self.processed_objects.append(f"{schema_name}.{volume_name}")
-
-        executor.shutdown(wait=True)
+                results.extend(result)
+            finally:
+                self.processed_objects.append(f"{schema_name}.{volume_name}")
 
         self.logger.info(f"All volumes processed in catalog {self.catalog_name}")
         return results
@@ -874,52 +938,46 @@ class BaseProvider(ABC):
         )
         self.logger.info(f"Tables: {tables}")
 
-        with ThreadPoolExecutor(max_workers=concurrency.max_workers) as executor:
-            # Submit table processing jobs
-            future_to_table = {
-                executor.submit(
-                    self.process_table, schema_config, table_config
-                ): table_config.table_name
-                for table_config in table_configs
-            }
+        items = [
+            (table_config.table_name, (schema_config, table_config))
+            for table_config in table_configs
+        ]
+        # Collect table results as they finish (timeout enforced per table)
+        for table_name, future in self._iter_completed_with_timeout(
+            self.process_table, items, concurrency.max_workers
+        ):
+            try:
+                result = []
+                result = future.result()
 
-            # Collect table results
-            for future in as_completed(future_to_table):
-                table_name = future_to_table[future]
-                try:
-                    result = []
-                    result = future.result(timeout=self.timeout_seconds)
-
-                    results.extend(result)
-                    # Check if any result in the list failed
-                    for single_result in result:
-                        if single_result.status == "failed":
-                            self.logger.error(
-                                f"{single_result.status} to {single_result.operation_type} {single_result.object_type} "
-                                f"{catalog_name}.{schema_name}.{table_name}: "
-                                f"{single_result.error_message}"
-                            )
-                        if single_result.status == "skipped":
-                            self.logger.warning(
-                                f"{single_result.status} {single_result.operation_type} {single_result.object_type} "
-                                f"{catalog_name}.{schema_name}.{table_name}: "
-                                f"{single_result.error_message}"
-                            )
-                except Exception as e:
-                    result = self._handle_exception(
-                        e,
-                        "processing table",
-                        catalog_name,
-                        schema_name,
-                        table_name,
-                        "table",
-                        start_time,
-                    )
-                    results.extend(result)
-                finally:
-                    self.processed_objects.append(f"{schema_name}.{table_name}")
-
-        executor.shutdown(wait=True)
+                results.extend(result)
+                # Check if any result in the list failed
+                for single_result in result:
+                    if single_result.status == "failed":
+                        self.logger.error(
+                            f"{single_result.status} to {single_result.operation_type} {single_result.object_type} "
+                            f"{catalog_name}.{schema_name}.{table_name}: "
+                            f"{single_result.error_message}"
+                        )
+                    if single_result.status == "skipped":
+                        self.logger.warning(
+                            f"{single_result.status} {single_result.operation_type} {single_result.object_type} "
+                            f"{catalog_name}.{schema_name}.{table_name}: "
+                            f"{single_result.error_message}"
+                        )
+            except Exception as e:
+                result = self._handle_exception(
+                    e,
+                    "processing table",
+                    catalog_name,
+                    schema_name,
+                    table_name,
+                    "table",
+                    start_time,
+                )
+                results.extend(result)
+            finally:
+                self.processed_objects.append(f"{schema_name}.{table_name}")
 
         self.logger.info(
             f"All tables processed in schema {self.catalog_name}.{schema_name}"
@@ -955,51 +1013,45 @@ class BaseProvider(ABC):
         )
         self.logger.info(f"Volumes: {volumes}")
 
-        with ThreadPoolExecutor(max_workers=concurrency.max_workers) as executor:
-            # Submit volume processing jobs
-            future_to_volume = {
-                executor.submit(
-                    self.process_volume, schema_config, volume_config
-                ): volume_config.volume_name
-                for volume_config in volume_configs
-            }
-
-            # Collect volume results
-            for future in as_completed(future_to_volume):
-                volume_name = future_to_volume[future]
-                try:
-                    result = []
-                    result = future.result(timeout=self.timeout_seconds)
-                    results.extend(result)
-                    # Check if any result in the list failed
-                    for single_result in result:
-                        if single_result.status == "failed":
-                            self.logger.error(
-                                f"{single_result.status} to {single_result.operation_type} {single_result.object_type} "
-                                f"{catalog_name}.{schema_name}.{volume_name}: "
-                                f"{single_result.error_message}"
-                            )
-                        if single_result.status == "skipped":
-                            self.logger.warning(
-                                f"{single_result.status} {single_result.operation_type} {single_result.object_type} "
-                                f"{catalog_name}.{schema_name}.{volume_name}: "
-                                f"{single_result.error_message}"
-                            )
-                except Exception as e:
-                    result = self._handle_exception(
-                        e,
-                        "processing volume",
-                        catalog_name,
-                        schema_name,
-                        volume_name,
-                        "volume",
-                        start_time,
-                    )
-                    results.extend(result)
-                finally:
-                    self.processed_objects.append(f"{schema_name}.{volume_name}")
-
-        executor.shutdown(wait=True)
+        items = [
+            (volume_config.volume_name, (schema_config, volume_config))
+            for volume_config in volume_configs
+        ]
+        # Collect volume results as they finish (timeout enforced per volume)
+        for volume_name, future in self._iter_completed_with_timeout(
+            self.process_volume, items, concurrency.max_workers
+        ):
+            try:
+                result = []
+                result = future.result()
+                results.extend(result)
+                # Check if any result in the list failed
+                for single_result in result:
+                    if single_result.status == "failed":
+                        self.logger.error(
+                            f"{single_result.status} to {single_result.operation_type} {single_result.object_type} "
+                            f"{catalog_name}.{schema_name}.{volume_name}: "
+                            f"{single_result.error_message}"
+                        )
+                    if single_result.status == "skipped":
+                        self.logger.warning(
+                            f"{single_result.status} {single_result.operation_type} {single_result.object_type} "
+                            f"{catalog_name}.{schema_name}.{volume_name}: "
+                            f"{single_result.error_message}"
+                        )
+            except Exception as e:
+                result = self._handle_exception(
+                    e,
+                    "processing volume",
+                    catalog_name,
+                    schema_name,
+                    volume_name,
+                    "volume",
+                    start_time,
+                )
+                results.extend(result)
+            finally:
+                self.processed_objects.append(f"{schema_name}.{volume_name}")
 
         self.logger.info(
             f"All volumes processed in schema {self.catalog_name}.{schema_name}"
