@@ -13,6 +13,11 @@ comments are never rewritten:
 * ``rewrite_catalog_references``: rewrite the catalog in fully qualified
   ``catalog.schema.object`` references (view / MV / ST bodies) when the target
   catalog has a different name.
+
+It also holds the quoting helpers used when generating SQL:
+
+* ``quote_identifier``: backtick-quote an identifier.
+* ``quote_string``: render a single-quoted string literal.
 """
 
 from __future__ import annotations
@@ -22,6 +27,23 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from .constants import UNREPLAYABLE_TBLPROPERTIES
+
+
+def quote_identifier(name: str) -> str:
+    """Backtick-quote an identifier, escaping embedded backticks."""
+    return "`" + str(name).replace("`", "``") + "`"
+
+
+def quote_string(value: str) -> str:
+    """
+    Render a single-quoted SQL string literal, backslash-escaping ``\\`` and
+    ``'``.
+
+    Use ``\\'`` rather than ``''``: Databricks SQL reads ``'it''s'`` as two
+    adjacent literals and concatenates them to ``its`` in expressions (it is
+    only accepted as ``it's`` in some DDL clauses such as COMMENT).
+    """
+    return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 @dataclass
@@ -409,7 +431,7 @@ def _ident_value(t: _Token) -> str:
 def _quote_ident(name: str, force: bool) -> str:
     if not force and _SIMPLE_IDENT_RE.match(name):
         return name
-    return "`" + name.replace("`", "``") + "`"
+    return quote_identifier(name)
 
 
 def _prev_sig(tokens: List[_Token], i: int) -> Optional[int]:
