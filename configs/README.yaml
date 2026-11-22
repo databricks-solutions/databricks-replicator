@@ -97,6 +97,8 @@ uc_object_types: [
     "column_comment",
     "materialized_view",
     "streaming_table",
+    "column_mask",
+    "row_filter",
   ]
 
 # Optional: replication group level table types for data replication or reconciliation
@@ -195,6 +197,11 @@ replication_config:
   # untouched). Set to true for hard sync: revoke all privileges from target-only
   # principals so target becomes an exact mirror of source (after principal_mapping).
   overwrite_grants: false
+  # Optional: column mask / row filter sync mode (uc_object_types column_mask, row_filter). default is false:
+  # masks and the row filter are applied with ALTER TABLE on existing target tables (after the table and its functions exist), and
+  # target masks / row filter that source does not have are kept. Set to true to also drop them (ALTER COLUMN ... DROP MASK, DROP ROW FILTER).
+  # A mask or row filter whose function is missing on target fails that object; the table is not changed.
+  overwrite_masks_and_row_filters: false
   # uc metadata specific configurations end here: ------------------------
 
   # Data Replication specific configurations start here: ------------------------

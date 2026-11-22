@@ -279,6 +279,7 @@ class TestProcessSchema:
 
 UC_TABLE_METHODS = [
     "_uc_replicate_ddl",
+    "_uc_replicate_masks_and_row_filters",
     "_uc_replicate_sql_st_mv",
     "_uc_replicate_table_comments",
     "_uc_replicate_table_tags",
