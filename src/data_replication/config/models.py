@@ -314,6 +314,7 @@ class ReconciliationConfig(BaseModel):
     threshold: Optional[float] = 100.0
     enable_sampling: Optional[bool] = False
     no_of_sampling_tables: Optional[int] = 10
+    reconcile_at_replicated_version: Optional[bool] = False
 
     @field_validator("source_catalog", "recon_outputs_catalog")
     @classmethod

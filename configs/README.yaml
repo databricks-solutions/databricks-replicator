@@ -309,6 +309,15 @@ reconciliation_config:
   enable_sampling: false
   # Optional: number of sampling tables if sampling is enabled. default is 10.
   no_of_sampling_tables: 10
+  # Optional: compare tables at the Delta versions replication produced, not the live tables. default is false.
+  # The source and target versions are read from the most recent CLONE commit in the target table history
+  # (operationParameters.sourceVersion, and the commit's version). Row count and missing data checks then use
+  # VERSION AS OF on both sides, so source writes made after the clone do not show up as mismatches.
+  # The schema check always compares live metadata. Falls back to live tables (logged, and recorded as
+  # reconciliation_mode=live in the reconciliation details) when there is no CLONE commit, the clone read from a
+  # different table than the reconciliation source (e.g. intermediate catalog), the target was written after the
+  # clone, the table is external/DLT, or time travel to a version fails (e.g. vacuumed or unshared history).
+  reconcile_at_replicated_version: false
 
 # Optional: Concurrency settings at replication group level
 concurrency:

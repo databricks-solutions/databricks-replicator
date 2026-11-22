@@ -6,12 +6,14 @@ row count validation, and missing data detection between source and target table
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from data_replication.databricks_operations import DatabricksOperations
 
 from ..config.models import RunResult, SchemaConfig, TableConfig
+from ..constants import NON_PINNABLE_TABLE_TYPES
 from ..exceptions import ReconciliationError, TableNotFoundError
+from ..sql_utils import normalize_table_name
 from ..utils import (
     create_spark_session,
     create_workspace_client,
@@ -21,6 +23,15 @@ from ..utils import (
     validate_spark_session,
 )
 from .base_provider import BaseProvider
+
+
+def _versions_or_none(
+    pinned_versions: Optional[Dict[str, int]],
+) -> Tuple[Optional[int], Optional[int]]:
+    """Return (source_version, target_version), or (None, None) when live."""
+    if not pinned_versions:
+        return None, None
+    return pinned_versions["source_version"], pinned_versions["target_version"]
 
 
 class ReconciliationProvider(BaseProvider):
@@ -81,15 +92,23 @@ class ReconciliationProvider(BaseProvider):
         )
 
     def _get_filtered_table_reference(
-        self, table_name: str, is_source: bool, reconciliation_config=None
+        self,
+        table_name: str,
+        is_source: bool,
+        reconciliation_config=None,
+        version: Optional[int] = None,
     ) -> str:
-        """Get table reference with optional filter applied.
+        """Get table reference with optional version and filter applied.
 
         Uses the effective (table-level, substituted) reconciliation_config when
-        given, falling back to the catalog-level config.
+        given, falling back to the catalog-level config. A version pins the
+        reference with ``VERSION AS OF`` before the filter is applied.
         """
         if reconciliation_config is None:
             reconciliation_config = self.catalog_config.reconciliation_config
+
+        if version is not None:
+            table_name = f"{table_name} VERSION AS OF {int(version)}"
 
         if is_source and reconciliation_config.source_filter_expression:
             return f"(SELECT * FROM {table_name} WHERE {reconciliation_config.source_filter_expression})"
@@ -97,6 +116,68 @@ class ReconciliationProvider(BaseProvider):
             return f"(SELECT * FROM {table_name} WHERE {reconciliation_config.target_filter_expression})"
         else:
             return table_name
+
+    def _resolve_pinned_versions(
+        self,
+        source_table: str,
+        target_table: str,
+        table_type: Optional[str],
+        reconciliation_config,
+    ) -> Tuple[Optional[Dict[str, int]], Optional[str]]:
+        """Decide whether the checks can run at the versions replication produced.
+
+        Returns ``(versions, None)`` with ``{"source_version", "target_version"}``
+        when both sides can be read at those versions, otherwise ``(None, reason)``
+        and the checks use the live tables. Returns ``(None, None)`` when
+        ``reconcile_at_replicated_version`` is off.
+        """
+        if not reconciliation_config.reconcile_at_replicated_version:
+            return None, None
+        try:
+            return self._find_pinned_versions(source_table, target_table, table_type)
+        except Exception as e:
+            return None, f"could not read replicated versions: {e}"
+
+    def _find_pinned_versions(
+        self, source_table: str, target_table: str, table_type: Optional[str]
+    ) -> Tuple[Optional[Dict[str, int]], Optional[str]]:
+        """Find the clone's versions and verify both sides can be read at them."""
+        if table_type and table_type.lower() in NON_PINNABLE_TABLE_TYPES:
+            return None, f"table type {table_type.lower()} is not version-pinned"
+
+        clone = self.db_ops.get_latest_clone_commit(target_table)
+        if clone is None:
+            return None, "no CLONE commit in target history"
+        if clone["source_version"] is None or not clone["source_table"]:
+            return None, "latest CLONE commit does not record its source version"
+        # Only a clone that read the reconciliation source is pinnable. A clone
+        # from another table (e.g. step 2 of an intermediate replication reads the
+        # intermediate copy) carries that table's version, not the source's.
+        if normalize_table_name(clone["source_table"]) != normalize_table_name(
+            source_table
+        ):
+            return None, (
+                f"latest CLONE read {clone['source_table']}, not {source_table} "
+                "(intermediate or different source catalog)"
+            )
+        # Replication is the only writer of the target, so the target equals its
+        # clone. A data write after the clone came from elsewhere (e.g. a streaming
+        # or autoloader table), and pinning would hide it.
+        if self.db_ops.has_data_writes_after(target_table, clone["target_version"]):
+            return None, "target has data writes after the CLONE commit"
+
+        pinned = {
+            "source_version": clone["source_version"],
+            "target_version": clone["target_version"],
+        }
+        for label, table, version in (
+            ("source", source_table, pinned["source_version"]),
+            ("target", target_table, pinned["target_version"]),
+        ):
+            error = self.db_ops.get_time_travel_error(table, version)
+            if error:
+                return None, f"{label} time travel to version {version} failed: {error}"
+        return pinned, None
 
     def setup_operation_catalogs(self) -> str:
         """Setup reconciliation-specific catalogs."""
@@ -223,6 +304,12 @@ class ReconciliationProvider(BaseProvider):
         target_table = f"{target_catalog}.{schema_name}.{table_name}"
         retry = table_config.retry
         table_type = None
+        # Which data the checks compared; set again once the versions are resolved.
+        version_details = {
+            "reconciliation_mode": "live",
+            "pinned_versions": None,
+            "version_fallback_reason": None,
+        }
 
         self.logger.info(
             f"Starting reconciliation: {source_table} vs {target_table}",
@@ -242,6 +329,28 @@ class ReconciliationProvider(BaseProvider):
             reconciliation_results = {}
             failed_checks = []
             skipped_checks = []
+
+            # Compare at the replicated versions when enabled and available.
+            pinned_versions, fallback_reason = self._resolve_pinned_versions(
+                source_table, target_table, table_type, reconciliation_config
+            )
+            if reconciliation_config.reconcile_at_replicated_version:
+                if pinned_versions:
+                    self.logger.info(
+                        f"Reconciling {source_table} at version {pinned_versions['source_version']} "
+                        f"vs {target_table} at version {pinned_versions['target_version']}",
+                        extra={"run_id": self.run_id, "operation": "reconciliation"},
+                    )
+                else:
+                    self.logger.info(
+                        f"Reconciling live tables for {source_table} vs {target_table}: {fallback_reason}",
+                        extra={"run_id": self.run_id, "operation": "reconciliation"},
+                    )
+            version_details = {
+                "reconciliation_mode": "version_pinned" if pinned_versions else "live",
+                "pinned_versions": pinned_versions,
+                "version_fallback_reason": fallback_reason,
+            }
 
             # Use custom retry decorator with logging
             @retry_with_logging(retry, self.logger)
@@ -310,6 +419,7 @@ class ReconciliationProvider(BaseProvider):
                     target_table,
                     reconciliation_operation,
                     reconciliation_config,
+                    pinned_versions,
                 )
                 row_count_end_time = datetime.now(timezone.utc)
                 row_count_duration = (
@@ -359,6 +469,7 @@ class ReconciliationProvider(BaseProvider):
                     target_table,
                     reconciliation_operation,
                     reconciliation_config,
+                    pinned_versions,
                 )
                 missing_data_end_time = datetime.now(timezone.utc)
                 missing_data_duration = (
@@ -448,6 +559,7 @@ class ReconciliationProvider(BaseProvider):
                             "failed_checks": failed_checks,
                             "skipped_checks": skipped_checks,
                             "check_durations": check_durations,
+                            **version_details,
                         },
                     )
                 ]
@@ -504,6 +616,7 @@ class ReconciliationProvider(BaseProvider):
                             "failed_checks": failed_checks,
                             "skipped_checks": skipped_checks,
                             "check_durations": check_durations,
+                            **version_details,
                         },
                     )
                 ]
@@ -538,6 +651,7 @@ class ReconciliationProvider(BaseProvider):
                         "source_table": source_table,
                         "target_table": target_table,
                         "table_type": table_type,
+                        **version_details,
                     },
                 )
             ]
@@ -696,15 +810,21 @@ class ReconciliationProvider(BaseProvider):
         target_table: str,
         reconciliation_operation,
         reconciliation_config,
+        pinned_versions: Optional[Dict[str, int]] = None,
     ) -> Dict[str, Any]:
-        """Perform row count comparison between source and target tables."""
+        """Perform row count comparison between source and target tables.
+
+        With ``pinned_versions`` both sides are read ``VERSION AS OF`` their
+        replicated version; otherwise the live tables are read.
+        """
         try:
+            source_version, target_version = _versions_or_none(pinned_versions)
             # Get filtered table references
             source_table_ref = self._get_filtered_table_reference(
-                source_table, True, reconciliation_config
+                source_table, True, reconciliation_config, source_version
             )
             target_table_ref = self._get_filtered_table_reference(
-                target_table, False, reconciliation_config
+                target_table, False, reconciliation_config, target_version
             )
 
             # Get row counts directly without creating a table
@@ -773,8 +893,13 @@ class ReconciliationProvider(BaseProvider):
         target_table: str,
         reconciliation_operation,
         reconciliation_config,
+        pinned_versions: Optional[Dict[str, int]] = None,
     ) -> Dict[str, Any]:
-        """Perform missing data check between source and target tables."""
+        """Perform missing data check between source and target tables.
+
+        With ``pinned_versions`` both sides are read ``VERSION AS OF`` their
+        replicated version; otherwise the live tables are read.
+        """
         # Read by the except block; set before anything in the try can fail.
         missing_data_table = None
         attempt = None
@@ -790,8 +915,14 @@ class ReconciliationProvider(BaseProvider):
             source_tbl = source_table.split(".")[2]
             target_tbl = target_table.split(".")[2]
 
+            source_version, target_version = _versions_or_none(pinned_versions)
             # Get common columns between source and target
-            common_fields = self.db_ops.get_common_fields(source_table, target_table)
+            common_fields = self.db_ops.get_common_fields(
+                source_table,
+                target_table,
+                source_version=source_version,
+                target_version=target_version,
+            )
 
             # Exclude specified columns from reconciliation
             exclude_columns = reconciliation_config.exclude_columns or []
@@ -809,10 +940,10 @@ class ReconciliationProvider(BaseProvider):
 
             # Get filtered table references
             source_table_ref = self._get_filtered_table_reference(
-                source_table, True, reconciliation_config
+                source_table, True, reconciliation_config, source_version
             )
             target_table_ref = self._get_filtered_table_reference(
-                target_table, False, reconciliation_config
+                target_table, False, reconciliation_config, target_version
             )
 
             # Create a hash-based comparison for data content and insert only mismatched records

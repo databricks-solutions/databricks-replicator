@@ -504,3 +504,17 @@ def rewrite_catalog_references(sql: str, catalog_map: Optional[Dict[str, str]]) 
                     continue
         out.append(tok.text)
     return "".join(out)
+
+
+def quote_table_name(name: str) -> str:
+    """Backtick-quote each part of a dotted ``catalog.schema.table`` name.
+
+    Existing backticks are stripped first, so already-quoted and plain names
+    produce the same result.
+    """
+    return ".".join(quote_identifier(part.strip("`")) for part in name.split("."))
+
+
+def normalize_table_name(name: str) -> str:
+    """Compare-friendly form of a table name: no backticks, lower case."""
+    return name.replace("`", "").lower()
