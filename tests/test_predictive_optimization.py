@@ -78,10 +78,10 @@ def replicate(p, **replication_kwargs):
 
 
 class TestConfig:
-    def test_default_is_warn(self):
+    def test_default_is_off(self):
         assert (
             ReplicationConfig().predictive_optimization_check
-            == PredictiveOptimizationCheck.WARN
+            == PredictiveOptimizationCheck.OFF
         )
 
     @pytest.mark.parametrize("value", ["off", "warn", "fail"])
@@ -177,7 +177,7 @@ class TestEnableOnManagedTarget:
                 inherited_from_type="SCHEMA",
             )
         )
-        r = replicate(p)  # default mode is warn
+        r = replicate(p, predictive_optimization_check="warn")
         assert r.status == "success"
         assert sql_calls(p.spark) == [r.details["step1_query"]]
         assert r.details["predictive_optimization"] == {
@@ -207,6 +207,13 @@ class TestEnableOnManagedTarget:
         p = existing_target(po(flag="ENABLE"))
         r = replicate(p, predictive_optimization_check="fail")
         assert "inherited from" not in r.error_message
+
+    def test_default_does_not_call_target(self):
+        p = existing_target(po(flag="ENABLE"))
+        r = replicate(p)  # default mode is off
+        assert r.status == "success"
+        assert r.details["predictive_optimization"] is None
+        p.target_dbops.get_table_predictive_optimization.assert_not_called()
 
     def test_off_does_not_call_target_or_clone(self):
         p = existing_target(po(flag="ENABLE"))
@@ -281,7 +288,7 @@ class TestNoAction:
 
     def test_api_error_in_warn_mode_also_clones(self):
         p = existing_target(po_side_effect=TimeoutError("slow"))
-        r = replicate(p)
+        r = replicate(p, predictive_optimization_check="warn")
         assert r.status == "success"
         assert r.details["predictive_optimization"]["error"] == "slow"
 

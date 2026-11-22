@@ -262,7 +262,7 @@ class ReplicationConfig(BaseModel):
     source_catalog: Optional[str] = None
     replicate_enable_predictive_optimization: Optional[bool] = False
     predictive_optimization_check: Optional[PredictiveOptimizationCheck] = (
-        PredictiveOptimizationCheck.WARN
+        PredictiveOptimizationCheck.OFF
     )
     create_backup_shared_catalog: Optional[bool] = False
     backup_share_name: Optional[str] = None

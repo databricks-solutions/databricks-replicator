@@ -59,7 +59,7 @@ Table below shows which configs are available to be defined at each hierarchy le
 
 Predictive optimization (PO) runs background `OPTIMIZE` / `VACUUM` on tables. If PO is enabled on an existing target table that the replicator deep clones into, those rewrites change the target's files and Delta versions underneath the clone, which can cause concurrent-write conflicts and version drift on repeat/incremental clones.
 
-Set `replication_config.predictive_optimization_check` (default `warn`) at any config level:
+Set `replication_config.predictive_optimization_check` (default `off`; the check costs one `tables.get` call, about 0.2 s, per existing target table) at any config level:
 
 | Value | Behaviour |
 |-------|-----------|

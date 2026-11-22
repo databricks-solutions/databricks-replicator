@@ -1161,7 +1161,7 @@ class ReplicationProvider(BaseProvider):
         """
         mode = (
             replication_config.predictive_optimization_check
-            or PredictiveOptimizationCheck.WARN
+            or PredictiveOptimizationCheck.OFF
         )
         if mode == PredictiveOptimizationCheck.OFF:
             return None, None
