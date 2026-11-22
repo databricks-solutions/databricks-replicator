@@ -8,7 +8,7 @@ streaming tables, materialized views, and intermediate catalogs.
 import re
 from datetime import datetime, timezone
 from time import sleep
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from databricks.sdk.service.catalog import VolumeType
 from databricks.sdk.service.sql import (
@@ -17,6 +17,13 @@ from databricks.sdk.service.sql import (
     StatementState,
 )
 
+from data_replication.abac_policy_ddl import (
+    UnsupportedPolicyError,
+    build_create_policy_ddl,
+    map_function_name,
+    policy_fingerprint,
+    policy_function_name,
+)
 from data_replication.databricks_operations import DatabricksOperations
 from data_replication.function_ddl import (
     UnsupportedFunctionError,
@@ -25,6 +32,7 @@ from data_replication.function_ddl import (
 
 # from delta.tables import DeltaTable
 from ..config.models import (
+    RetryConfig,
     RunResult,
     SchemaConfig,
     TableConfig,
@@ -33,6 +41,8 @@ from ..config.models import (
     VolumeConfig,
 )
 from ..constants import (
+    ABAC_POLICY_SCOPE_ORDER,
+    ABAC_REPLAYABLE_POLICY_TYPES,
     DICT_FOR_CREATION_VOLUME,
     DICT_FOR_UPDATE_VOLUME,
 )
@@ -3470,6 +3480,286 @@ class ReplicationProvider(BaseProvider):
             return _result("failed", error_msg, attempt=attempt)
         except Exception as e:
             error_msg = f"Failed to replicate function {source_function}: {str(e)}"
+            self.logger.error(
+                error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+            )
+            return _result("failed", error_msg)
+
+    def _uc_replicate_abac_policies(
+        self, schema_configs: List[SchemaConfig]
+    ) -> List[RunResult]:
+        """Replicate ABAC column-mask and row-filter policies defined on the
+        source catalog, its schemas and its tables.
+
+        Discovery is one query on the source ``information_schema``; each
+        policy's definition is read with the SDK and replayed with
+        ``CREATE OR REPLACE POLICY``. Target policies that already match are
+        skipped. Runs after tables and governed tags exist on the target.
+        """
+        replication_config = self.catalog_config.replication_config
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+        retry = self.catalog_config.retry or RetryConfig()
+        catalog_map = self._catalog_reference_map(replication_config)
+        start_time = datetime.now(timezone.utc)
+        try:
+            rows = self.source_dbops.list_abac_policy_definitions(source_catalog)
+        except Exception as e:
+            error_msg = f"Failed to list ABAC policies in {source_catalog}: {str(e)}"
+            self.logger.error(
+                error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+            )
+            return [
+                self._function_run_result(
+                    "",
+                    source_catalog,
+                    "abac_policy",
+                    "failed",
+                    start_time,
+                    {"source_catalog": source_catalog},
+                    retry.max_attempts,
+                    error_message=error_msg,
+                )
+            ]
+
+        schemas = {sc.schema_name: sc for sc in schema_configs}
+        # schema name -> table names in scope (None if listing failed)
+        tables_in_scope: Dict[str, Optional[set]] = {}
+        results: List[RunResult] = []
+        rows = sorted(
+            rows,
+            key=lambda r: (
+                ABAC_POLICY_SCOPE_ORDER.get((r["on_securable_type"] or "").upper(), 3),
+                r["schema_name"] or "",
+                r["securable_name"] or "",
+                r["policy_name"] or "",
+            ),
+        )
+        for row in rows:
+            policy_name = row["policy_name"]
+            scope = (row["on_securable_type"] or "").upper()
+            schema_name = row["schema_name"] or ""
+            securable_name = row["securable_name"] or ""
+            policy_type = (row["policy_type"] or "").upper()
+            if policy_type not in ABAC_REPLAYABLE_POLICY_TYPES:
+                self.logger.warning(
+                    f"Skipping ABAC policy {policy_name} on {scope} {source_catalog}: "
+                    f"policy type {policy_type} is not replicated",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                results.append(
+                    self._function_run_result(
+                        schema_name,
+                        policy_name,
+                        "abac_policy",
+                        "skipped",
+                        start_time,
+                        {"policy_type": policy_type, "on_securable_type": scope},
+                        retry.max_attempts,
+                        error_message=f"policy type {policy_type} is not replicated",
+                    )
+                )
+                continue
+
+            if scope == "CATALOG":
+                source_fullname = source_catalog
+                target_fullname = target_catalog
+            elif scope in ("SCHEMA", "TABLE") and schema_name in schemas:
+                if scope == "SCHEMA":
+                    source_fullname = f"{source_catalog}.{schema_name}"
+                    target_fullname = f"{target_catalog}.{schema_name}"
+                else:
+                    if schema_name not in tables_in_scope:
+                        try:
+                            tables_in_scope[schema_name] = (
+                                self._abac_table_names_in_scope(schemas[schema_name])
+                            )
+                        except Exception as e:
+                            self.logger.error(
+                                f"Failed to list tables in {schema_name} for ABAC policies: {str(e)}",
+                                extra={
+                                    "run_id": self.run_id,
+                                    "operation": "uc_replication",
+                                },
+                            )
+                            tables_in_scope[schema_name] = None
+                    names = tables_in_scope[schema_name]
+                    if names is None:
+                        results.append(
+                            self._function_run_result(
+                                schema_name,
+                                policy_name,
+                                "abac_policy",
+                                "failed",
+                                start_time,
+                                {"on_securable": f"{schema_name}.{securable_name}"},
+                                retry.max_attempts,
+                                error_message=f"Could not list tables in {schema_name} to scope ABAC policy",
+                            )
+                        )
+                        continue
+                    if securable_name not in names:
+                        continue
+                    source_fullname = f"{source_catalog}.{schema_name}.{securable_name}"
+                    target_fullname = f"{target_catalog}.{schema_name}.{securable_name}"
+            else:
+                # Schema outside the replication scope.
+                continue
+
+            target_quoted = ".".join(
+                quote_identifier(part) for part in target_fullname.split(".")
+            )
+            results.append(
+                self._replicate_abac_policy(
+                    scope=scope,
+                    schema_name=schema_name,
+                    policy_name=policy_name,
+                    source_fullname=source_fullname,
+                    target_fullname=target_fullname,
+                    target_quoted=target_quoted,
+                    catalog_map=catalog_map,
+                    retry=retry,
+                )
+            )
+        return results
+
+    def _abac_table_names_in_scope(self, schema_config: SchemaConfig) -> set:
+        """Source tables a schema's table-scoped ABAC policies may attach to.
+
+        Mirrors the configured selection (explicit tables, or filter/all tables
+        in the schema, minus exclusions) but, unlike ``_get_tables``, ignores
+        the already-processed / shared-table bookkeeping: a table that failed
+        earlier in the run is still in scope for its policies.
+        """
+        source_catalog = self.catalog_config.replication_config.source_catalog
+        schema_name = schema_config.schema_name
+        if schema_config.tables:
+            names = [t.table_name for t in schema_config.tables]
+        elif schema_config.table_filter_expression:
+            names = self.source_dbops.get_tables_by_filter(
+                source_catalog, schema_name, schema_config.table_filter_expression
+            )
+        elif self.catalog_config.schema_table_filter_expression:
+            names = []
+        else:
+            names = self.source_dbops.get_tables_in_schema(source_catalog, schema_name)
+        excluded = {t.table_name for t in (schema_config.exclude_tables or [])}
+        return {name for name in names if name not in excluded}
+
+    def _replicate_abac_policy(
+        self,
+        scope: str,
+        schema_name: str,
+        policy_name: str,
+        source_fullname: str,
+        target_fullname: str,
+        target_quoted: str,
+        catalog_map: Dict[str, str],
+        retry: RetryConfig,
+    ) -> RunResult:
+        """Replicate one ABAC policy (read from the source SDK, replay on the
+        target with CREATE OR REPLACE POLICY) and return its RunResult."""
+        start_time = datetime.now(timezone.utc)
+        max_attempts = retry.max_attempts
+        details = {
+            "on_securable_type": scope,
+            "source_on_securable": source_fullname,
+            "target_on_securable": target_fullname,
+        }
+
+        def _result(status, error_message=None, attempt=1):
+            return self._function_run_result(
+                schema_name,
+                policy_name,
+                "abac_policy",
+                status,
+                start_time,
+                details,
+                max_attempts,
+                error_message=error_message,
+                attempt=attempt,
+            )
+
+        try:
+            source_policy = self.source_dbops.get_abac_policy(
+                scope, source_fullname, policy_name
+            )
+            if source_policy is None:
+                return _result(
+                    "failed",
+                    f"Source ABAC policy not found: {policy_name} on {scope} {source_fullname}",
+                )
+            to_principals = [
+                self._map_principal(p) for p in (source_policy.to_principals or [])
+            ]
+            except_principals = [
+                self._map_principal(p) for p in (source_policy.except_principals or [])
+            ]
+            try:
+                ddl = build_create_policy_ddl(
+                    source_policy,
+                    target_on_securable=target_quoted,
+                    to_principals=to_principals,
+                    except_principals=except_principals,
+                    catalog_map=catalog_map,
+                )
+                expected_function = map_function_name(
+                    policy_function_name(source_policy), catalog_map
+                )
+            except UnsupportedPolicyError as e:
+                self.logger.warning(
+                    f"Skipping ABAC policy {policy_name} on {scope} {source_fullname}: {str(e)}",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                return _result("skipped", str(e))
+            details["ddl"] = ddl
+
+            source_fingerprint = policy_fingerprint(
+                source_policy, to_principals, except_principals, expected_function
+            )
+            target_policy = self.target_dbops.get_abac_policy(
+                scope, target_fullname, policy_name
+            )
+            if target_policy is not None and source_fingerprint == policy_fingerprint(
+                target_policy,
+                target_policy.to_principals or [],
+                target_policy.except_principals or [],
+                policy_function_name(target_policy),
+            ):
+                details["reason"] = "unchanged"
+                return _result("skipped")
+
+            @retry_with_logging(retry, self.logger)
+            def replication_operation(query: str):
+                self.logger.debug(
+                    f"Executing ABAC policy DDL: {query}",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                self.target_spark.sql(query)
+                return True
+
+            result, last_exception, attempt, max_attempts = replication_operation(ddl)
+            if result:
+                self.logger.info(
+                    f"ABAC policy replicated: {policy_name} on {scope} {source_fullname} -> {target_fullname}",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                return _result("success", attempt=attempt)
+            error_msg = (
+                f"ABAC policy replication failed after {max_attempts} attempts: "
+                f"{policy_name} on {scope} {source_fullname} -> {target_fullname}"
+            )
+            if last_exception:
+                error_msg += f" | Last error: {str(last_exception)}"
+            self.logger.error(
+                error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+            )
+            return _result("failed", error_msg, attempt=attempt)
+        except Exception as e:
+            error_msg = (
+                f"Failed to replicate ABAC policy {policy_name} on {scope} "
+                f"{source_fullname}: {str(e)}"
+            )
             self.logger.error(
                 error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
             )

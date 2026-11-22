@@ -96,6 +96,7 @@ class UCObjectType(str, Enum):
     VOLUME_GRANT = "volume_grant"
     FUNCTION = "function"
     FUNCTION_GRANT = "function_grant"
+    ABAC_POLICY = "abac_policy"
     MATERIALIZED_VIEW = "materialized_view"
     STREAMING_TABLE = "streaming_table"
     ALL = "all"
