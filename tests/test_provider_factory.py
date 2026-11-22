@@ -408,7 +408,6 @@ class TestRunOperations:
         f = self._factory(config, uc_object_types=[UCObjectType.ALL])
         provider = MagicMock()
         provider.process_catalog.return_value = [_rr(catalog="c1"), _rr("failed", "c1")]
-        provider.process_ownership.return_value = []
         f.create_provider = MagicMock(return_value=provider)
 
         summary = f.run_operations()
@@ -416,12 +415,9 @@ class TestRunOperations:
         f._replicate_storage_credentials.assert_called_once()
         f._replicate_external_locations.assert_called_once()
         f._replicate_tag_policies.assert_called_once()
-        # Only the enabled catalog gets a provider: once for catalog work and
-        # once for the final ownership pass (ALL includes ownership).
-        provider.process_ownership.assert_called_once()
+        # Only the enabled catalog gets a provider.
         assert [c.args[0].catalog_name for c in f.create_provider.call_args_list] == [
-            "c1",
-            "c1",
+            "c1"
         ]
         assert summary.successful_operations == 4  # cred, loc, tp, 1 table
         assert summary.failed_operations == 1

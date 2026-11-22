@@ -1260,8 +1260,9 @@ class ProviderFactory:
         self, catalogs: List[TargetCatalogConfig]
     ) -> List[RunResult]:
         """
-        Copy source owners to the target for catalogs that include
-        ``ownership`` (or ``all``). Replication only.
+        Copy source owners to the target for catalogs that explicitly list
+        ``ownership``. Replication only. Opt-in: ``all`` does not trigger it,
+        because owner transfers can remove the run principal's privileges.
 
         Runs after _run_catalog_operations has finished every catalog, so an
         owner transfer never removes privileges that later catalog work
@@ -1274,10 +1275,7 @@ class ProviderFactory:
         results: List[RunResult] = []
         for catalog in catalogs:
             catalog_types = catalog.uc_object_types or []
-            if (
-                UCObjectType.OWNERSHIP not in catalog_types
-                and UCObjectType.ALL not in catalog_types
-            ):
+            if UCObjectType.OWNERSHIP not in catalog_types:
                 continue
             try:
                 provider = self.create_provider(catalog)

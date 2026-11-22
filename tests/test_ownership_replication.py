@@ -599,7 +599,7 @@ class TestFactoryOrdering:
 
     def test_ownership_runs_after_real_catalog_loop(self, patched, config, monkeypatch):
         """The ownership pass sees every catalog's results already recorded."""
-        f = self._factory(config, uc_object_types=[UCObjectType.ALL])
+        f = self._factory(config, uc_object_types=[UCObjectType.OWNERSHIP])
         seen_before_ownership = []
 
         def catalog_run(catalogs):
@@ -615,6 +615,33 @@ class TestFactoryOrdering:
         f.run_operations()
         assert seen_before_ownership == [2]
 
+    def test_all_alone_does_not_run_ownership(self, patched, config):
+        """`all` is not an opt-in for ownership: no provider gets an ownership pass."""
+        f = self._factory(config, uc_object_types=[UCObjectType.ALL])
+        provider = MagicMock()
+        provider.process_catalog.return_value = []
+        f.create_provider = MagicMock(return_value=provider)
+
+        f.run_operations()
+
+        # Catalog work runs for each enabled catalog; the ownership pass never does.
+        assert provider.process_catalog.call_count == 2
+        provider.process_ownership.assert_not_called()
+
+    def test_all_plus_explicit_ownership_runs_ownership_last(self, patched, config):
+        f = self._factory(
+            config, uc_object_types=[UCObjectType.ALL, UCObjectType.OWNERSHIP]
+        )
+        calls = MagicMock()
+        f._run_catalog_operations = MagicMock()
+        f._run_ownership_operations = MagicMock(return_value=[])
+        calls.attach_mock(f._run_catalog_operations, "catalogs")
+        calls.attach_mock(f._run_ownership_operations, "ownership")
+
+        f.run_operations()
+
+        assert [c[0] for c in calls.mock_calls] == ["catalogs", "ownership"]
+
     def test_ownership_not_run_for_storage_credential_only(self, patched, config):
         f = self._factory(config, uc_object_types=[UCObjectType.STORAGE_CREDENTIAL])
         f._run_catalog_operations = MagicMock()
@@ -622,14 +649,17 @@ class TestFactoryOrdering:
         f.run_operations()
         f._run_ownership_operations.assert_not_called()
 
-    def test_ownership_only_catalogs_with_ownership_or_all_get_a_provider(
-        self, patched, config
-    ):
+    def test_only_catalogs_listing_ownership_get_a_provider(self, patched, config):
         f = self._factory(config)
         cats = [
             TargetCatalogConfig(
                 catalog_name="yes",
                 uc_object_types=[UCObjectType.OWNERSHIP],
+                replication_config={"enabled": True},
+            ),
+            TargetCatalogConfig(
+                catalog_name="both",
+                uc_object_types=[UCObjectType.ALL, UCObjectType.OWNERSHIP],
                 replication_config={"enabled": True},
             ),
             TargetCatalogConfig(
@@ -651,7 +681,7 @@ class TestFactoryOrdering:
 
         assert [c.args[0].catalog_name for c in f.create_provider.call_args_list] == [
             "yes",
-            "all",
+            "both",
         ]
         assert len(out) == 2
         assert f.audit_logger.log_results.call_count == 2
