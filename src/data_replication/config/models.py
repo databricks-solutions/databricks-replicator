@@ -74,8 +74,6 @@ class RetryConfig(BaseModel):
 class PredictiveOptimizationCheck(str, Enum):
     """What to do when predictive optimization is enabled on an existing target table."""
 
-    model_config = ConfigDict(extra="forbid")
-
     OFF = "off"
     WARN = "warn"
     FAIL = "fail"
