@@ -55,6 +55,30 @@ Table below shows which configs are available to be defined at each hierarchy le
 | retry | YES | YES |YES |YES |
 
 
+## Predictive Optimization Check
+
+Predictive optimization (PO) runs background `OPTIMIZE` / `VACUUM` on tables. If PO is enabled on an existing target table that the replicator deep clones into, those rewrites change the target's files and Delta versions underneath the clone, which can cause concurrent-write conflicts and version drift on repeat/incremental clones.
+
+Set `replication_config.predictive_optimization_check` (default `warn`) at any config level:
+
+| Value | Behaviour |
+|-------|-----------|
+| `off` | No check. |
+| `warn` | Logs a warning and records the check in the table's RunResult `details.predictive_optimization`. The table is still cloned. |
+| `fail` | Skips the table. Its RunResult is `failed` with `error_message` starting `PO_ENABLED_ON_TARGET`. |
+
+How the check works:
+- Runs only when the target table already exists. Before the clone, the replicator calls `tables.get` on the target workspace and reads `effective_predictive_optimization_flag`. The flag is resolved server-side through catalog -> schema -> table inheritance, so `inherited_from_name` / `inherited_from_type` show where ENABLE came from.
+- Only a confirmed `ENABLE` on a `MANAGED` target warns or blocks. `DISABLE`, `INHERIT`, external / streaming / view targets, and missing targets are not acted on.
+- Fail-open: an API error or an unreadable flag continues the replication and logs at debug level.
+- Not in scope: the replicator does not change PO settings on existing target catalogs / schemas / tables. PO is only disabled on catalogs and schemas the replicator creates (`replicate_enable_predictive_optimization`).
+
+```yaml
+replication_config:
+  predictive_optimization_check: fail   # skip tables whose existing managed target has PO enabled
+```
+
+
 ## Replication Group Configuration Override
 Replication group level configs can be overriden by <a href=../configs/environments.yaml>environments.yaml</a> and CLI arguments (see blow). CLI takes precedence over environments.yaml, which takes precedence over replication group.
 

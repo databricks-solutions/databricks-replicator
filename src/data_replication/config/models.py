@@ -71,6 +71,16 @@ class RetryConfig(BaseModel):
     retry_delay_seconds: int = Field(default=5, ge=1)
 
 
+class PredictiveOptimizationCheck(str, Enum):
+    """What to do when predictive optimization is enabled on an existing target table."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    OFF = "off"
+    WARN = "warn"
+    FAIL = "fail"
+
+
 class UCObjectType(str, Enum):
     """Enumeration of Unity Catalog object types for replication."""
 
@@ -253,6 +263,9 @@ class ReplicationConfig(BaseModel):
     share_name: Optional[str] = None
     source_catalog: Optional[str] = None
     replicate_enable_predictive_optimization: Optional[bool] = False
+    predictive_optimization_check: Optional[PredictiveOptimizationCheck] = (
+        PredictiveOptimizationCheck.WARN
+    )
     create_backup_shared_catalog: Optional[bool] = False
     backup_share_name: Optional[str] = None
     backup_catalog: Optional[str] = None
