@@ -1728,6 +1728,103 @@ class DatabricksOperations:
                 f"Failed to update grants for {securable_type} {full_name}: {str(e)}"
             ) from e
 
+    def get_securable_owner(self, securable_type: str, full_name: str) -> Optional[str]:
+        """
+        Read the owner of a UC securable via the SDK.
+
+        Args:
+            securable_type: One of "CATALOG", "SCHEMA", "TABLE" (covers views,
+                MVs and STs), "VOLUME" or "FUNCTION".
+            full_name: Fully qualified name of the securable.
+
+        Returns:
+            The owner (user, group or service principal application_id), or
+            None if the securable has no owner.
+
+        Raises:
+            NotFound: If the securable does not exist. Other SDK errors are
+                wrapped, so callers can tell a missing object from a failed read.
+        """
+        if self.workspace_client is None:
+            raise Exception("WorkspaceClient is required for ownership operations")
+        wc = self.workspace_client
+        try:
+            if securable_type == "CATALOG":
+                return wc.catalogs.get(full_name).owner
+            if securable_type == "SCHEMA":
+                return wc.schemas.get(full_name).owner
+            if securable_type == "TABLE":
+                return wc.tables.get(full_name).owner
+            if securable_type == "VOLUME":
+                return wc.volumes.read(full_name).owner
+            if securable_type == "FUNCTION":
+                return wc.functions.get(full_name).owner
+        except NotFound:
+            raise
+        except Exception as e:
+            raise Exception(
+                f"Failed to get owner of {securable_type} {full_name}: {str(e)}"
+            ) from e
+        raise ValueError(f"Unsupported securable type for ownership: {securable_type}")
+
+    def set_securable_owner(
+        self, securable_type: str, full_name: str, owner: str
+    ) -> None:
+        """
+        Transfer ownership of a UC securable via the SDK ``update(owner=...)``
+        call for the securable's API. Same securable types as
+        ``get_securable_owner``.
+
+        Raises:
+            Exception: If the update fails or workspace_client is None.
+        """
+        if self.workspace_client is None:
+            raise Exception("WorkspaceClient is required for ownership operations")
+        wc = self.workspace_client
+        try:
+            if securable_type == "CATALOG":
+                wc.catalogs.update(name=full_name, owner=owner)
+            elif securable_type == "SCHEMA":
+                wc.schemas.update(full_name=full_name, owner=owner)
+            elif securable_type == "TABLE":
+                wc.tables.update(full_name=full_name, owner=owner)
+            elif securable_type == "VOLUME":
+                wc.volumes.update(name=full_name, owner=owner)
+            elif securable_type == "FUNCTION":
+                wc.functions.update(name=full_name, owner=owner)
+            else:
+                raise ValueError(
+                    f"Unsupported securable type for ownership: {securable_type}"
+                )
+        except ValueError:
+            raise
+        except Exception as e:
+            raise Exception(
+                f"Failed to set owner of {securable_type} {full_name} to {owner}: {str(e)}"
+            ) from e
+
+    def principal_exists(self, principal: str) -> bool:
+        """
+        Check whether a principal resolves on this workspace as a user
+        (userName), group (displayName) or service principal (applicationId).
+
+        Raises:
+            Exception: If workspace_client is None or a SCIM lookup fails.
+        """
+        if self.workspace_client is None:
+            raise Exception("WorkspaceClient is required for principal lookups")
+        wc = self.workspace_client
+        escaped = principal.replace("\\", "\\\\").replace('"', '\\"')
+        lookups = (
+            (wc.users.list, f'userName eq "{escaped}"'),
+            (wc.groups.list, f'displayName eq "{escaped}"'),
+            (wc.service_principals.list, f'applicationId eq "{escaped}"'),
+        )
+        for list_fn, scim_filter in lookups:
+            if next(iter(list_fn(filter=scim_filter)), None) is not None:
+                return True
+        return False
+
     def list_tag_policies(self) -> List[TagPolicy]:
         """
         List all tag policies using workspace client.

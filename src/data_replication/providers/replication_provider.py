@@ -6,10 +6,12 @@ streaming tables, materialized views, and intermediate catalogs.
 """
 
 import re
+from copy import deepcopy
 from datetime import datetime, timezone
 from time import sleep
-from typing import Dict, List
+from typing import Dict, List, NamedTuple, Optional
 
+from databricks.sdk.errors import NotFound
 from databricks.sdk.service.catalog import VolumeType
 from databricks.sdk.service.sql import (
     Disposition,
@@ -25,6 +27,7 @@ from data_replication.function_ddl import (
 
 # from delta.tables import DeltaTable
 from ..config.models import (
+    RetryConfig,
     RunResult,
     SchemaConfig,
     TableConfig,
@@ -32,6 +35,7 @@ from ..config.models import (
     UCObjectType,
     VolumeConfig,
 )
+from ..config.models import VolumeType as ConfigVolumeType
 from ..constants import (
     DICT_FOR_CREATION_VOLUME,
     DICT_FOR_UPDATE_VOLUME,
@@ -51,12 +55,25 @@ from ..utils import (
     get_workspace_url_from_host,
     map_cloud_url,
     merge_maps,
+    merge_models_recursive,
     recursive_substitute,
     replace_cloud_url,
     retry_with_logging,
     validate_spark_session,
 )
 from .base_provider import BaseProvider
+
+
+class OwnershipItem(NamedTuple):
+    """One securable whose owner is copied from source to target."""
+
+    object_type: str  # RunResult object_type, e.g. "table_ownership"
+    securable: str  # SDK securable type: CATALOG, SCHEMA, TABLE, VOLUME, FUNCTION
+    schema_name: Optional[str]
+    object_name: str
+    source_full_name: str
+    target_full_name: str
+    retry: RetryConfig
 
 
 class ReplicationProvider(BaseProvider):
@@ -3529,3 +3546,341 @@ class ReplicationProvider(BaseProvider):
                 )
             )
         return results
+
+    # ------------------------------------------------------------------ #
+    # Ownership (UCObjectType.OWNERSHIP)
+    # ------------------------------------------------------------------ #
+
+    def process_ownership(self) -> List[RunResult]:
+        """
+        Copy source owners onto the target catalog and the objects in scope:
+        per schema, tables/views/MVs/STs, volumes and functions, then the
+        schema; the catalog comes last.
+
+        Children go before parents. Owning a schema or catalog carries
+        implicit privileges over what sits under it, so the run principal
+        keeps those privileges until the transfer that would remove them.
+        Called by ProviderFactory after all catalogs are processed.
+        """
+        target_catalog = self.catalog_config.catalog_name
+        # UC replication drives from the source catalog: list source objects.
+        self.catalog_name = self.catalog_config.replication_config.source_catalog
+        # The ownership pass covers every object in scope, including objects
+        # replicated earlier in this run, so drop the processed-object filters.
+        self.completed_objects = []
+        self.shared_tables = []
+
+        start_time = datetime.now(timezone.utc)
+        try:
+            schema_configs = self._get_schemas()
+        except Exception as e:
+            return self._handle_exception(
+                e,
+                "list schemas for ownership",
+                target_catalog,
+                "",
+                "",
+                "catalog",
+                start_time,
+            )
+
+        results: List[RunResult] = []
+        object_items: List[OwnershipItem] = []
+        schema_items: List[OwnershipItem] = []
+        for schema_config in schema_configs:
+            schema_name = schema_config.schema_name
+            scope = self._ownership_scope(schema_config)
+            try:
+                for table_config in self._get_tables(scope, scope.tables):
+                    object_items.append(
+                        self._ownership_item(
+                            "table_ownership",
+                            "TABLE",
+                            (schema_name, table_config.table_name),
+                            schema_name,
+                            table_config.table_name,
+                            scope.retry,
+                        )
+                    )
+                for volume_config in self._get_volumes(scope, scope.volumes):
+                    object_items.append(
+                        self._ownership_item(
+                            "volume_ownership",
+                            "VOLUME",
+                            (schema_name, volume_config.volume_name),
+                            schema_name,
+                            volume_config.volume_name,
+                            scope.retry,
+                        )
+                    )
+                function_names, failed = self._list_source_functions(
+                    scope, "function_ownership"
+                )
+                results.extend(failed)
+                for function_name in function_names:
+                    object_items.append(
+                        self._ownership_item(
+                            "function_ownership",
+                            "FUNCTION",
+                            (schema_name, function_name),
+                            schema_name,
+                            function_name,
+                            scope.retry,
+                        )
+                    )
+            except Exception as e:
+                results.extend(
+                    self._handle_exception(
+                        e,
+                        "list objects for ownership",
+                        target_catalog,
+                        schema_name,
+                        "",
+                        "schema",
+                        start_time,
+                    )
+                )
+            schema_items.append(
+                self._ownership_item(
+                    "schema_ownership",
+                    "SCHEMA",
+                    (schema_name,),
+                    schema_name,
+                    schema_name,
+                    scope.retry,
+                )
+            )
+
+        source_catalog, _ = self._ownership_names()
+        catalog_item = OwnershipItem(
+            object_type="catalog_ownership",
+            securable="CATALOG",
+            schema_name=None,
+            object_name=target_catalog,
+            source_full_name=source_catalog,
+            target_full_name=target_catalog,
+            retry=self.catalog_config.retry,
+        )
+        self.logger.info(
+            f"Applying ownership for {len(object_items)} objects, "
+            f"{len(schema_items)} schemas and catalog {target_catalog}",
+            extra={"run_id": self.run_id, "operation": "uc_replication"},
+        )
+        principal_ok: dict = {}
+        for item in object_items + schema_items + [catalog_item]:
+            results.append(self._uc_replicate_owner(item, principal_ok))
+        return results
+
+    def _ownership_scope(self, schema_config: SchemaConfig) -> SchemaConfig:
+        """
+        Schema config used to enumerate objects for the ownership pass.
+
+        Merged the same way process_catalog merges it, but uc_object_types is
+        cleared so _get_tables/_get_volumes do not narrow the set by other
+        object types (ownership covers every table kind). Explicit
+        table_types and volume_types from config still apply; volumes default
+        to managed and external, as they do for replication.
+        """
+        scope = merge_models_recursive(deepcopy(self.catalog_config), schema_config)
+        volume_types = scope.volume_types or [
+            ConfigVolumeType.MANAGED,
+            ConfigVolumeType.EXTERNAL,
+        ]
+        return scope.model_copy(
+            update={"uc_object_types": None, "volume_types": volume_types}
+        )
+
+    def _ownership_names(self, *parts: str) -> tuple:
+        """(source, target) full names for the catalog plus optional parts."""
+        source_catalog = self.catalog_config.replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+        return (
+            ".".join((source_catalog, *parts)),
+            ".".join((target_catalog, *parts)),
+        )
+
+    def _ownership_item(
+        self,
+        object_type: str,
+        securable: str,
+        name_parts: tuple,
+        schema_name: str,
+        object_name: str,
+        retry: RetryConfig,
+    ) -> OwnershipItem:
+        """name_parts are the path below the catalog, e.g. (schema, table)."""
+        source_full, target_full = self._ownership_names(*name_parts)
+        return OwnershipItem(
+            object_type=object_type,
+            securable=securable,
+            schema_name=schema_name,
+            object_name=object_name,
+            source_full_name=source_full,
+            target_full_name=target_full,
+            retry=retry,
+        )
+
+    def _ownership_run_result(
+        self,
+        item: OwnershipItem,
+        status: str,
+        start_time: datetime,
+        details: dict,
+        attempt: int = 1,
+        max_attempts: int = 1,
+        error_message: Optional[str] = None,
+    ) -> RunResult:
+        end_time = datetime.now(timezone.utc)
+        return RunResult(
+            operation_type="uc_replication",
+            catalog_name=self.catalog_config.catalog_name,
+            schema_name=item.schema_name,
+            object_name=item.object_name,
+            object_type=item.object_type,
+            status=status,
+            start_time=start_time.isoformat(),
+            end_time=end_time.isoformat(),
+            duration_seconds=(end_time - start_time).total_seconds(),
+            error_message=error_message,
+            details=details,
+            attempt_number=attempt,
+            max_attempts=max_attempts,
+        )
+
+    def _uc_replicate_owner(self, item: OwnershipItem, principal_ok: dict) -> RunResult:
+        """
+        Copy one securable's owner from source to target.
+
+        Outcomes: success (owner transferred); skipped (source owner unset,
+        target object missing, owner already matches, or the mapped owner
+        principal does not exist on the target); failed (any other error).
+        A missing owner principal is a skip with a warning, not a failure.
+
+        principal_ok caches target principal lookups for the run.
+        """
+        start_time = datetime.now(timezone.utc)
+        details = {
+            "source_object": item.source_full_name,
+            "target_object": item.target_full_name,
+        }
+        max_attempts = item.retry.max_attempts
+        try:
+            source_owner = self.source_dbops.get_securable_owner(
+                item.securable, item.source_full_name
+            )
+            if not source_owner:
+                return self._ownership_run_result(
+                    item,
+                    "skipped",
+                    start_time,
+                    {**details, "reason": "source owner is not set"},
+                    max_attempts=max_attempts,
+                )
+            mapped_owner = self._map_principal(source_owner)
+            details.update(source_owner=source_owner, target_owner=mapped_owner)
+
+            try:
+                target_owner = self.target_dbops.get_securable_owner(
+                    item.securable, item.target_full_name
+                )
+            except NotFound:
+                return self._ownership_run_result(
+                    item,
+                    "skipped",
+                    start_time,
+                    {**details, "reason": "target object does not exist"},
+                    max_attempts=max_attempts,
+                )
+            details["target_owner_before"] = target_owner
+
+            if target_owner and target_owner.lower() == mapped_owner.lower():
+                return self._ownership_run_result(
+                    item,
+                    "skipped",
+                    start_time,
+                    {**details, "reason": "owner already matches"},
+                    max_attempts=max_attempts,
+                )
+
+            if mapped_owner not in principal_ok:
+                principal_ok[mapped_owner] = self.target_dbops.principal_exists(
+                    mapped_owner
+                )
+            if not principal_ok[mapped_owner]:
+                self.logger.warning(
+                    f"Owner {mapped_owner!r} of {item.source_full_name} is not found on "
+                    f"the target workspace; ownership of {item.target_full_name} is "
+                    "not changed. Add it to principal_mapping to transfer ownership.",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                return self._ownership_run_result(
+                    item,
+                    "skipped",
+                    start_time,
+                    {**details, "reason": "owner principal not found on target"},
+                    max_attempts=max_attempts,
+                )
+
+            @retry_with_logging(item.retry, self.logger)
+            def _apply_owner():
+                self.target_dbops.set_securable_owner(
+                    item.securable, item.target_full_name, mapped_owner
+                )
+                return True
+
+            ok, last_exception, attempt, max_attempts = _apply_owner()
+            if not ok:
+                error_msg = (
+                    f"Failed to transfer ownership of {item.target_full_name} to "
+                    f"{mapped_owner}: {last_exception}"
+                )
+                self.logger.error(
+                    error_msg,
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                return self._ownership_run_result(
+                    item,
+                    "failed",
+                    start_time,
+                    details,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    error_message=error_msg,
+                )
+            self.logger.info(
+                f"Transferred ownership of {item.target_full_name} to {mapped_owner}",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
+            return self._ownership_run_result(
+                item,
+                "success",
+                start_time,
+                details,
+                attempt=attempt,
+                max_attempts=max_attempts,
+            )
+        except NotFound:
+            error_msg = f"Source object does not exist: {item.source_full_name}"
+            return self._ownership_run_result(
+                item,
+                "failed",
+                start_time,
+                details,
+                max_attempts=max_attempts,
+                error_message=error_msg,
+            )
+        except Exception as e:
+            error_msg = (
+                f"Failed to replicate ownership of {item.target_full_name}: {str(e)}"
+            )
+            self.logger.error(
+                error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+            )
+            return self._ownership_run_result(
+                item,
+                "failed",
+                start_time,
+                details,
+                max_attempts=max_attempts,
+                error_message=error_msg,
+            )

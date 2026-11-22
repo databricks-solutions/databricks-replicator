@@ -98,6 +98,7 @@ class UCObjectType(str, Enum):
     FUNCTION_GRANT = "function_grant"
     MATERIALIZED_VIEW = "materialized_view"
     STREAMING_TABLE = "streaming_table"
+    OWNERSHIP = "ownership"
     ALL = "all"
 
 

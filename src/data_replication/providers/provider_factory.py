@@ -482,6 +482,9 @@ class ProviderFactory:
                 )
 
             self._run_catalog_operations(enabled_catalogs)
+            # Ownership is the final step, after every catalog's objects,
+            # grants and tags exist. See _run_ownership_operations.
+            self._run_ownership_operations(enabled_catalogs)
 
             summary = self.create_summary(
                 start_time, self.completed_run_results, operation_name
@@ -1251,6 +1254,53 @@ class ProviderFactory:
                 )
                 results.append(result)
 
+        return results
+
+    def _run_ownership_operations(
+        self, catalogs: List[TargetCatalogConfig]
+    ) -> List[RunResult]:
+        """
+        Copy source owners to the target for catalogs that include
+        ``ownership`` (or ``all``). Replication only.
+
+        Runs after _run_catalog_operations has finished every catalog, so an
+        owner transfer never removes privileges that later catalog work
+        still needs. Each catalog is handled on its own; a failure is
+        recorded as a failed result and the other catalogs still run.
+        """
+        if self._operation_type != "replication":
+            return []
+
+        results: List[RunResult] = []
+        for catalog in catalogs:
+            catalog_types = catalog.uc_object_types or []
+            if (
+                UCObjectType.OWNERSHIP not in catalog_types
+                and UCObjectType.ALL not in catalog_types
+            ):
+                continue
+            try:
+                provider = self.create_provider(catalog)
+                catalog_results = provider.process_ownership()
+            except Exception as e:
+                error_msg = f"Ownership failed for catalog {catalog.catalog_name}: {unwrap_retry_error(e)}"
+                self.logger.error(error_msg)
+                now = datetime.now(timezone.utc).isoformat()
+                catalog_results = [
+                    RunResult(
+                        operation_type="replication",
+                        catalog_name=catalog.catalog_name,
+                        status="failed",
+                        start_time=now,
+                        end_time=now,
+                        error_message=error_msg,
+                    )
+                ]
+
+            results.extend(catalog_results)
+            self.completed_run_results.extend(catalog_results)
+            if catalog_results and self.audit_logger:
+                self.audit_logger.log_results(catalog_results)
         return results
 
     # Convenience methods for specific operations
