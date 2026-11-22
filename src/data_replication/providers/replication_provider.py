@@ -38,6 +38,8 @@ from ..constants import (
 )
 from ..exceptions import ReplicationError, TableNotFoundError
 from ..sql_utils import (
+    quote_identifier,
+    quote_string,
     rewrite_catalog_references,
     strip_inline_masks_and_row_filters,
     strip_unreplayable_tblproperties,
@@ -55,11 +57,6 @@ from ..utils import (
     validate_spark_session,
 )
 from .base_provider import BaseProvider
-
-
-def _escape_sql_string(value: str) -> str:
-    """Escape a value for use inside a single-quoted SQL string literal."""
-    return value.replace("\\", "\\\\").replace("'", "''")
 
 
 class ReplicationProvider(BaseProvider):
@@ -1441,14 +1438,14 @@ class ReplicationProvider(BaseProvider):
                     return run_results
 
                 query = ""
-                escaped_comment = _escape_sql_string(source_comment)
+                comment_literal = quote_string(source_comment)
                 if table_type.upper() == "VIEW":
                     query = f"""
-                    COMMENT ON VIEW {target_table} IS '{escaped_comment}'
+                    COMMENT ON VIEW {target_table} IS {comment_literal}
                     """
                 if table_type.lower() in ["managed", "external"]:
                     query = f"""
-                    COMMENT ON TABLE {target_table} IS '{escaped_comment}'
+                    COMMENT ON TABLE {target_table} IS {comment_literal}
                     """
 
                 # Execute the replication
@@ -2442,7 +2439,7 @@ class ReplicationProvider(BaseProvider):
             table_type = self.source_dbops.get_table_type(source_table)
 
             comment_list = [
-                f"`{k}` COMMENT '{_escape_sql_string(v)}'"
+                f"{quote_identifier(k)} COMMENT {quote_string(v)}"
                 for k, v in merged_comment_maps.items()
                 if v is not None
             ]
@@ -2457,13 +2454,14 @@ class ReplicationProvider(BaseProvider):
                         k: v for k, v in merged_comment_maps.items() if v is not None
                     }
                     for name, comment in filtered_comment_maps.items():
-                        comment_str = comment.replace("\\", "\\\\").replace("'", "''")
+                        column = quote_identifier(name)
+                        comment_literal = quote_string(comment)
                         query = f"""
-                        COMMENT ON COLUMN {target_table}.`{name}` IS '{comment_str}'
+                        COMMENT ON COLUMN {target_table}.{column} IS {comment_literal}
                         """
                         if table_type.lower() == "streaming_table":
                             query = f"""
-                            ALTER STREAMING TABLE {target_table} ALTER COLUMN `{name}` COMMENT '{comment_str}'
+                            ALTER STREAMING TABLE {target_table} ALTER COLUMN {column} COMMENT {comment_literal}
                             """
                         # Execute the replication
                         result, last_exception, attempt, max_attempts = (
@@ -3392,8 +3390,12 @@ class ReplicationProvider(BaseProvider):
         replication_config = schema_config.replication_config
         source_catalog = replication_config.source_catalog
         target_catalog = self.catalog_config.catalog_name
-        source_function = f"`{source_catalog}`.`{schema_name}`.`{function_name}`"
-        target_function = f"`{target_catalog}`.`{schema_name}`.`{function_name}`"
+        source_function = ".".join(
+            quote_identifier(n) for n in (source_catalog, schema_name, function_name)
+        )
+        target_function = ".".join(
+            quote_identifier(n) for n in (target_catalog, schema_name, function_name)
+        )
         max_attempts = schema_config.retry.max_attempts
         details = {
             "source_function": source_function,
@@ -3489,7 +3491,10 @@ class ReplicationProvider(BaseProvider):
             source_full = f"{source_catalog}.{schema_name}.{function_name}"
             target_full = f"{target_catalog}.{schema_name}.{function_name}"
             if not self.target_dbops.if_function_exists(
-                f"`{target_catalog}`.`{schema_name}`.`{function_name}`"
+                ".".join(
+                    quote_identifier(n)
+                    for n in (target_catalog, schema_name, function_name)
+                )
             ):
                 self.logger.warning(
                     f"Target function does not exist for function_grant replication: {target_full}",

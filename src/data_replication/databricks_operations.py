@@ -991,10 +991,6 @@ class DatabricksOperations:
             # Schema might not exist or be accessible
             return []
 
-    @staticmethod
-    def _sql_literal(value: str) -> str:
-        return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
-
     def get_functions_in_schema(self, catalog_name: str, schema_name: str) -> List[str]:
         """
         Get names of all user-defined functions in a schema (Databricks SDK

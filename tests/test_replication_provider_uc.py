@@ -314,7 +314,7 @@ class TestTableComments:
     def test_quote_in_comment_is_escaped(self):
         p = self._provider(src="owner's table")
         p._uc_replicate_table_comments("s", table_config())
-        assert "IS 'owner''s table'" in sql_calls(p.target_spark)[0]
+        assert "IS 'owner\\'s table'" in sql_calls(p.target_spark)[0]
 
 
 # ---------- column comments ----------
@@ -350,7 +350,7 @@ class TestColumnComments:
         assert r.status == "success"
         queries = sql_calls(p.target_spark)
         assert len(queries) == 2
-        assert "COMMENT ON COLUMN `tgt`.`s`.`t`.`a` IS 'it''s a'" in queries[0]
+        assert "COMMENT ON COLUMN `tgt`.`s`.`t`.`a` IS 'it\\'s a'" in queries[0]
         assert "IS 'b\\\\c'" in queries[1]
 
     def test_streaming_table_uses_alter_streaming_table(self):
@@ -399,7 +399,7 @@ class TestColumnComments:
     def test_managed_table_escapes_quotes(self):
         p = self._provider(src=[{"a": "it's"}], tgt=[{"a": ""}])
         p._uc_replicate_column_comments("s", table_config())
-        assert "COMMENT 'it''s'" in sql_calls(p.target_spark)[0]
+        assert "COMMENT 'it\\'s'" in sql_calls(p.target_spark)[0]
 
 
 # ---------- tags ----------

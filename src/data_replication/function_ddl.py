@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from databricks.sdk.service.catalog import FunctionInfo, FunctionParameterInfo
 
-from .sql_utils import rewrite_catalog_references
+from .sql_utils import quote_identifier, quote_string, rewrite_catalog_references
 
 
 class UnsupportedFunctionError(ValueError):
@@ -33,16 +33,6 @@ _DATA_ACCESS_CLAUSES = {
     "CONTAINS_SQL": "CONTAINS SQL",
     "READS_SQL_DATA": "READS SQL DATA",
 }
-
-
-def quote_identifier(name: str) -> str:
-    """Backtick-quote an identifier, escaping embedded backticks."""
-    return "`" + str(name).replace("`", "``") + "`"
-
-
-def quote_string(value: str) -> str:
-    """Render a SQL single-quoted string literal."""
-    return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 def _enum_text(value: Any) -> str:

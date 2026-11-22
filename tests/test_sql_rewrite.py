@@ -7,7 +7,11 @@ from types import SimpleNamespace
 import pytest
 
 from data_replication.providers.replication_provider import ReplicationProvider
-from data_replication.sql_utils import rewrite_catalog_references
+from data_replication.sql_utils import (
+    quote_identifier,
+    quote_string,
+    rewrite_catalog_references,
+)
 
 M = {"src": "tgt"}
 
@@ -224,3 +228,25 @@ def test_reference_inside_nested_comment_is_untouched():
     assert rewrite_catalog_references(sql, M) == (
         "SELECT 1 /* a /* b */ src.s.t */ FROM tgt.s.t"
     )
+
+
+class TestQuoting:
+    @pytest.mark.parametrize(
+        "name, expected",
+        [("tbl", "`tbl`"), ("my table", "`my table`"), ("a`b", "`a``b`")],
+    )
+    def test_quote_identifier(self, name, expected):
+        assert quote_identifier(name) == expected
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("plain", "'plain'"),
+            ("it's", "'it\\'s'"),
+            ("back\\slash", "'back\\\\slash'"),
+            ("\\'", "'\\\\\\''"),
+        ],
+    )
+    def test_quote_string_uses_backslash_escapes(self, value, expected):
+        # '' is not safe: Databricks SQL concatenates 'it''s' to 'its'.
+        assert quote_string(value) == expected
