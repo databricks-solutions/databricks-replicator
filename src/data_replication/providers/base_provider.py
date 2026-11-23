@@ -197,6 +197,16 @@ class BaseProvider(ABC):
             RunResult object for the operation
         """
 
+    def process_ownership(self) -> List[RunResult]:
+        """
+        Apply source owners to the replicated objects of this catalog.
+
+        Called by ProviderFactory after every catalog has been processed, so
+        owner transfers never run before other operations. Providers that
+        replicate UC objects override this; the default is a no-op.
+        """
+        return []
+
     def process_volume(
         self, schema_config: SchemaConfig, volume_config: VolumeConfig
     ) -> List[RunResult]:
@@ -256,11 +266,14 @@ class BaseProvider(ABC):
         try:
             # Setup operation-specific catalogs (implemented by subclasses)
             self.catalog_name = self.setup_operation_catalogs()
-            uc_object_types_catalog_processed = (
-                self.catalog_config.uc_object_types.copy()
-                if self.catalog_config.uc_object_types
-                else []
-            )
+            # Ownership is applied by ProviderFactory in a final pass
+            # (process_ownership), so it must not keep the catalog/schema
+            # processing below from returning early.
+            uc_object_types_catalog_processed = [
+                t
+                for t in (self.catalog_config.uc_object_types or [])
+                if t != UCObjectType.OWNERSHIP
+            ]
             self.logger.info(
                 f"Starting {self.get_operation_name()} catalog: {self.catalog_name}",
                 extra={

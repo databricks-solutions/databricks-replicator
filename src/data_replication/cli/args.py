@@ -275,7 +275,8 @@ def setup_argument_parser():
         help="comma-separated list of UC metadata types to replicate. "
         "Acceptable values: all,catalog,catalog_tag,schema,schema_tag,"
         "view,table,view_tag,table_tag,column_tag,volume,volume_tag,column_comment,"
-        "function,function_grant",
+        "function,function_grant,ownership (opt-in: not included in all; "
+        "copies source owners and runs last)",
     )
 
     parser.add_argument(

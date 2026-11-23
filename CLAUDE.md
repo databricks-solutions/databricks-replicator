@@ -19,7 +19,7 @@ Databricks replicator: replicates Unity Catalog metadata and data between worksp
 
 ## Conventions
 - New config option: add it to `config/models.py` **and** document it in `configs/README.yaml`.
-- New UC object type: add to `UCObjectType`, make sure `all` covers it, update `--uc-object-types` help in `cli/args.py` and the README object matrix.
+- New UC object type: add to `UCObjectType`, make sure `all` covers it, update `--uc-object-types` help in `cli/args.py` and the README object matrix. Exception: `ownership` is opt-in and not part of `all`, because owner transfers can remove the run principal's privileges.
 - Per-object work returns `RunResult`s and uses `retry_with_logging` (`utils.py`); never let one object's failure abort the run.
 - DDL replay (tables/views/MV/ST) rewrites only the statement header of `SHOW CREATE TABLE` output; body rewrites (catalog names, masks, properties) must be token-aware — never naive regex over SQL that may contain string literals. Add such helpers to `sql_utils.py` and reuse its tokenizer.
 - Before adding a helper, search `src/` for existing code that does the same job and extend it. Domain constants go in `constants.py`; keep `utils.py` for generic helpers and give a self-contained concern its own module.

@@ -97,6 +97,11 @@ uc_object_types: [
     "column_comment",
     "materialized_view",
     "streaming_table",
+    # "ownership": OPT-IN, not included in "all". Copies source owners of catalog,
+    # schema, tables/views/MVs/STs, volumes and functions to the target. Runs last,
+    # after all other objects. Owners are mapped via principal_mapping; a missing
+    # target principal is skipped. Can remove the run principal's privileges.
+    "ownership",
   ]
 
 # Optional: replication group level table types for data replication or reconciliation
