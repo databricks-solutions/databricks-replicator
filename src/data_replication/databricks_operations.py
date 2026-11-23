@@ -17,6 +17,7 @@ from databricks.sdk.service.catalog import (
     ExternalLocationInfo,
     FunctionInfo,
     PermissionsChange,
+    PolicyInfo,
     PrivilegeAssignment,
     SchemaInfo,
     StorageCredentialInfo,
@@ -31,6 +32,7 @@ from data_replication.config.models import (
     RetryConfig,
 )
 from data_replication.exceptions import TableNotFoundError
+from data_replication.sql_utils import quote_identifier
 from data_replication.utils import (
     get_spark_current_user,
     get_spark_workspace_url,
@@ -1066,6 +1068,43 @@ class DatabricksOperations:
             return True
         except Exception:
             return False
+
+    def list_abac_policy_definitions(self, catalog_name: str) -> List[dict]:
+        """
+        ABAC policies attached to the catalog, its schemas and its tables
+        (``information_schema.abac_policy_definitions``), one row per policy.
+
+        Only identifying columns are returned; the full definition comes from
+        ``get_abac_policy``.
+
+        Raises:
+            Exception: if the query fails (callers decide how to report it).
+        """
+        rows = self.spark.sql(
+            "SELECT policy_name, policy_type, on_securable_type, schema_name, "
+            f"securable_name FROM {quote_identifier(catalog_name)}"
+            ".information_schema.abac_policy_definitions"
+        ).collect()
+        return [row.asDict() for row in rows]
+
+    def get_abac_policy(
+        self, on_securable_type: str, on_securable_fullname: str, name: str
+    ) -> Optional[PolicyInfo]:
+        """
+        Fetch an ABAC policy's full definition (Databricks SDK
+        ``policies.get_policy``).
+
+        Returns:
+            The ``PolicyInfo``, or None if the policy does not exist.
+        """
+        if self.workspace_client is None:
+            raise ValueError("A WorkspaceClient is required to read ABAC policies")
+        try:
+            return self.workspace_client.policies.get_policy(
+                on_securable_type, on_securable_fullname, name
+            )
+        except NotFound:
+            return None
 
     def filter_volumes_by_type(
         self,

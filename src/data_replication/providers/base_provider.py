@@ -424,6 +424,10 @@ class BaseProvider(ABC):
                 uc_object_types_schema_processed = (
                     uc_object_types_catalog_processed.copy()
                 )
+                # ABAC policies run once per catalog after the schema loop; they
+                # must not keep schema processing alive for ABAC-only runs.
+                if UCObjectType.ABAC_POLICY in uc_object_types_schema_processed:
+                    uc_object_types_schema_processed.remove(UCObjectType.ABAC_POLICY)
 
                 # Replicate schema if configured
                 if self.catalog_config.uc_object_types and (
@@ -586,6 +590,17 @@ class BaseProvider(ABC):
                             f"Completed volume {self.get_operation_name()} for catalog {self.catalog_name}: "
                             f"{successful}/{total} operations successful"
                         )
+
+            # Replicate ABAC policies last: they reference functions, tables
+            # and governed tags, which must exist on the target by now.
+            if self.catalog_config.uc_object_types and (
+                UCObjectType.ABAC_POLICY in self.catalog_config.uc_object_types
+                or UCObjectType.ALL in self.catalog_config.uc_object_types
+            ):
+                run_result = self._uc_replicate_abac_policies(schema_configs)
+                results.extend(run_result)
+                if run_result:
+                    self.audit_logger.log_results(list(run_result))
 
         except Exception as e:
             result = self._handle_exception(
@@ -2482,6 +2497,13 @@ class BaseProvider(ABC):
     ) -> List[RunResult]:
         """Replicate grants on UC functions in a schema. Implemented by
         providers that support UC metadata replication."""
+        return []
+
+    def _uc_replicate_abac_policies(
+        self, schema_configs: List[SchemaConfig]
+    ) -> List[RunResult]:
+        """Replicate ABAC policies on the catalog, its schemas and tables.
+        Implemented by providers that support UC metadata replication."""
         return []
 
     def _uc_replicate_catalog(self) -> List[RunResult]:

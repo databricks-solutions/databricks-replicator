@@ -127,3 +127,9 @@ UNREPLAYABLE_TBLPROPERTIES: Tuple[str, ...] = (
     "delta.lastCommitTimestamp",
     "delta.lastUpdateVersion",
 )
+
+# information_schema.abac_policy_definitions.policy_type values that are replayed
+# with CREATE POLICY. GRANT / DENY policies (no SDK PolicyType) are skipped.
+ABAC_REPLAYABLE_POLICY_TYPES = ("ROW_FILTER", "COLUMN_MASK")
+# Scope order for ABAC policy replication: catalog, then schema, then table.
+ABAC_POLICY_SCOPE_ORDER = {"CATALOG": 0, "SCHEMA": 1, "TABLE": 2}
