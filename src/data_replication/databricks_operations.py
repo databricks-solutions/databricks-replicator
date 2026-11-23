@@ -543,6 +543,24 @@ class DatabricksOperations:
 
         raise TableNotFoundError(f"Table {table_name} does not exist")
 
+    def get_table_info(self, full_name: str) -> Optional[TableInfo]:
+        """
+        Fetch table metadata (Databricks SDK ``tables.get``), including column
+        masks (``ColumnInfo.mask``) and the row filter (``TableInfo.row_filter``).
+
+        Args:
+            full_name: catalog.schema.table (no backticks).
+
+        Returns:
+            The ``TableInfo``, or None if the table does not exist.
+        """
+        if self.workspace_client is None:
+            raise ValueError("A WorkspaceClient is required to read tables")
+        try:
+            return self.workspace_client.tables.get(full_name=full_name)
+        except NotFound:
+            return None
+
     def get_table_predictive_optimization(self, table_name: str) -> dict:
         """
         Read a table's type and its effective predictive optimization (PO) flag.

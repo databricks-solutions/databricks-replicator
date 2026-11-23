@@ -106,6 +106,8 @@ class UCObjectType(str, Enum):
     FUNCTION_GRANT = "function_grant"
     MATERIALIZED_VIEW = "materialized_view"
     STREAMING_TABLE = "streaming_table"
+    COLUMN_MASK = "column_mask"
+    ROW_FILTER = "row_filter"
     ALL = "all"
 
 
@@ -290,6 +292,7 @@ class ReplicationConfig(BaseModel):
     overwrite_tags: Optional[bool] = True
     overwrite_comments: Optional[bool] = True
     overwrite_grants: Optional[bool] = False
+    overwrite_masks_and_row_filters: Optional[bool] = False
     replicate_as_managed: Optional[bool] = False
     strip_inline_masks_and_row_filters: Optional[bool] = True
     copy_files: Optional[bool] = True

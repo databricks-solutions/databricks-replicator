@@ -127,3 +127,10 @@ UNREPLAYABLE_TBLPROPERTIES: Tuple[str, ...] = (
     "delta.lastCommitTimestamp",
     "delta.lastUpdateVersion",
 )
+
+# Column masks and row filters (classic, table-level policies). Applied with
+# ALTER TABLE after the table exists on target. Only managed / external tables
+# are processed for them.
+COLUMN_MASK_OBJECT_TYPE = "column_mask"
+ROW_FILTER_OBJECT_TYPE = "row_filter"
+MASKABLE_TABLE_TYPES: Tuple[str, ...] = ("MANAGED", "EXTERNAL")

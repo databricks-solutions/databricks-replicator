@@ -22,6 +22,17 @@ from data_replication.function_ddl import (
     UnsupportedFunctionError,
     build_create_function_ddl,
 )
+from data_replication.mask_filter_ddl import (
+    column_mask_specs,
+    drop_column_mask_sql,
+    drop_row_filter_sql,
+    function_sql,
+    plan_column_masks,
+    plan_row_filter,
+    row_filter_spec,
+    set_column_mask_sql,
+    set_row_filter_sql,
+)
 
 # from delta.tables import DeltaTable
 from ..config.models import (
@@ -35,9 +46,12 @@ from ..config.models import (
     VolumeConfig,
 )
 from ..constants import (
+    COLUMN_MASK_OBJECT_TYPE,
     DICT_FOR_CREATION_VOLUME,
     DICT_FOR_UPDATE_VOLUME,
+    MASKABLE_TABLE_TYPES,
     PO_ENABLED_ON_TARGET,
+    ROW_FILTER_OBJECT_TYPE,
 )
 from ..exceptions import ReplicationError, TableNotFoundError
 from ..sql_utils import (
@@ -277,6 +291,21 @@ class ReplicationProvider(BaseProvider):
                 result = self._uc_replicate_ddl(
                     schema_name,
                     table_config,
+                )
+                results.extend(result)
+            # Column masks / row filters need the table (DDL above) and the
+            # functions (replicated before tables) to exist on target.
+            masks_requested = [
+                kind
+                for kind in (UCObjectType.COLUMN_MASK, UCObjectType.ROW_FILTER)
+                if kind in self.catalog_config.uc_object_types
+                or UCObjectType.ALL in self.catalog_config.uc_object_types
+            ]
+            if masks_requested and source_table_type.upper() in MASKABLE_TABLE_TYPES:
+                result = self._uc_replicate_masks_and_row_filters(
+                    schema_name,
+                    table_config,
+                    masks_requested,
                 )
                 results.extend(result)
             if (
@@ -1816,6 +1845,261 @@ class ReplicationProvider(BaseProvider):
             )
         ]
 
+    def _uc_replicate_masks_and_row_filters(
+        self,
+        schema_name: str,
+        table_config: TableConfig,
+        object_types: List[UCObjectType],
+    ) -> List[RunResult]:
+        """
+        Replicate the classic column masks and row filter of a table with
+        ALTER TABLE (issue #39). Runs after the table DDL and after functions
+        are replicated, so the functions exist on target.
+
+        One RunResult per requested object type (column_mask / row_filter):
+        * policies identical to source are left alone (re-runs are no-ops);
+        * a mask / filter function missing on target fails that object before
+          any change is made to the table;
+        * policies present on target only are dropped only when
+          overwrite_masks_and_row_filters is true, otherwise they are kept.
+        """
+        start_time = datetime.now(timezone.utc)
+        table_name = table_config.table_name
+        replication_config = table_config.replication_config
+        source_catalog = replication_config.source_catalog
+        target_catalog = self.catalog_config.catalog_name
+        source_table = f"`{source_catalog}`.`{schema_name}`.`{table_name}`"
+        target_table = f"`{target_catalog}`.`{schema_name}`.`{table_name}`"
+        max_attempts = table_config.retry.max_attempts
+        overwrite = bool(
+            getattr(replication_config, "overwrite_masks_and_row_filters", False)
+        )
+        catalog_map = self._catalog_reference_map(replication_config)
+
+        try:
+            source_info = self.source_dbops.get_table_info(
+                f"{source_catalog}.{schema_name}.{table_name}"
+            )
+            target_info = self.target_dbops.get_table_info(
+                f"{target_catalog}.{schema_name}.{table_name}"
+            )
+            if source_info is None or target_info is None:
+                error_msg = (
+                    f"Source or target table does not exist for column mask / row "
+                    f"filter replication: {source_table} -> {target_table}"
+                )
+                self.logger.warning(
+                    error_msg,
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                return [
+                    self._function_run_result(
+                        schema_name,
+                        table_name,
+                        kind.value,
+                        "failed",
+                        start_time,
+                        {"source_table": source_table, "target_table": target_table},
+                        max_attempts,
+                        error_message=error_msg,
+                    )
+                    for kind in object_types
+                ]
+
+            mask_plan = plan_column_masks(
+                column_mask_specs(source_info.columns, catalog_map),
+                column_mask_specs(target_info.columns),
+                overwrite,
+            )
+            filter_plan = plan_row_filter(
+                row_filter_spec(source_info.row_filter, catalog_map),
+                row_filter_spec(target_info.row_filter),
+                overwrite,
+            )
+            if mask_plan.kept or filter_plan.action == "kept":
+                self.logger.warning(
+                    f"Target-only column masks / row filter kept on {target_table} "
+                    f"(not on source {source_table}). Set "
+                    f"overwrite_masks_and_row_filters to true to drop them.",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+
+            results: List[RunResult] = []
+            if UCObjectType.COLUMN_MASK in object_types:
+                statements = [
+                    set_column_mask_sql(target_table, spec) for spec in mask_plan.to_set
+                ] + [
+                    drop_column_mask_sql(target_table, column)
+                    for column in mask_plan.to_unset
+                ]
+                results.append(
+                    self._apply_policy_statements(
+                        schema_name,
+                        table_config,
+                        COLUMN_MASK_OBJECT_TYPE,
+                        statements,
+                        [spec.function for spec in mask_plan.to_set],
+                        {
+                            "source_table": source_table,
+                            "target_table": target_table,
+                            "set_columns": [s.column for s in mask_plan.to_set],
+                            "unset_columns": list(mask_plan.to_unset),
+                            "unchanged_columns": list(mask_plan.unchanged),
+                            "kept_target_only_columns": list(mask_plan.kept),
+                        },
+                        protects_pending=bool(mask_plan.to_set),
+                    )
+                )
+            if UCObjectType.ROW_FILTER in object_types:
+                statements = []
+                functions = []
+                if filter_plan.action == "set":
+                    statements = [set_row_filter_sql(target_table, filter_plan.spec)]
+                    functions = [filter_plan.spec.function]
+                elif filter_plan.action == "drop":
+                    statements = [drop_row_filter_sql(target_table)]
+                results.append(
+                    self._apply_policy_statements(
+                        schema_name,
+                        table_config,
+                        ROW_FILTER_OBJECT_TYPE,
+                        statements,
+                        functions,
+                        {
+                            "source_table": source_table,
+                            "target_table": target_table,
+                            "action": filter_plan.action,
+                            "function": (
+                                filter_plan.spec.function if filter_plan.spec else None
+                            ),
+                        },
+                        protects_pending=filter_plan.action == "set",
+                    )
+                )
+            return results
+        except Exception as e:
+            error_msg = (
+                f"Failed to replicate column masks / row filters: "
+                f"{source_table} -> {target_table}: {str(e)}"
+            )
+            self.logger.error(
+                error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+            )
+            return [
+                self._function_run_result(
+                    schema_name,
+                    table_name,
+                    kind.value,
+                    "failed",
+                    start_time,
+                    {"source_table": source_table, "target_table": target_table},
+                    max_attempts,
+                    error_message=error_msg,
+                )
+                for kind in object_types
+            ]
+
+    def _apply_policy_statements(
+        self,
+        schema_name: str,
+        table_config: TableConfig,
+        object_type: str,
+        statements: List[str],
+        functions: List[str],
+        details: dict,
+        protects_pending: bool,
+    ) -> RunResult:
+        """
+        Check the functions exist on target, then run the ALTER statements
+        (retried as a batch; SET MASK / SET ROW FILTER replace and DROP is a
+        no-op when nothing is set, so a retry is safe).
+
+        ``protects_pending`` marks results whose source policy should be on
+        the target table but is not (a failure then leaves the table
+        unprotected); this is flagged in details and logged as an error.
+        """
+        start_time = datetime.now(timezone.utc)
+        table_name = table_config.table_name
+        target_table = details["target_table"]
+        max_attempts = table_config.retry.max_attempts
+
+        def _result(status, error_message=None, attempt=1):
+            return self._function_run_result(
+                schema_name,
+                table_name,
+                object_type,
+                status,
+                start_time,
+                details,
+                max_attempts,
+                error_message=error_message,
+                attempt=attempt,
+            )
+
+        def _mark_unprotected(error_msg: str) -> str:
+            # Fail-closed signal: the table is on target without a policy the
+            # source enforces. Flagged in details (never drops the table).
+            if not protects_pending:
+                return error_msg
+            details["unprotected_on_target"] = True
+            return (
+                f"{error_msg} | {target_table} is left WITHOUT the source "
+                f"{object_type} policy until it is applied"
+            )
+
+        details["statements"] = list(statements)
+        if not statements:
+            details["skipped"] = True
+            return _result("success")
+
+        missing = [
+            fn
+            for fn in dict.fromkeys(functions)
+            if not self.target_dbops.if_function_exists(function_sql(fn))
+        ]
+        if missing:
+            error_msg = _mark_unprotected(
+                f"{object_type} function(s) not found on target: {', '.join(missing)}. "
+                f"Replicate them first (object type 'function') or create them on "
+                f"target. {target_table} was not changed."
+            )
+            self.logger.error(
+                error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+            )
+            return _result("failed", error_msg)
+
+        @retry_with_logging(table_config.retry, self.logger)
+        def replication_operation(stmts: List[str]):
+            for stmt in stmts:
+                self.logger.debug(
+                    f"Executing {object_type} DDL: {stmt}",
+                    extra={"run_id": self.run_id, "operation": "uc_replication"},
+                )
+                self.target_spark.sql(stmt)
+            return True
+
+        result, last_exception, attempt, max_attempts = replication_operation(
+            statements
+        )
+        if result:
+            self.logger.info(
+                f"{object_type} applied on {target_table} ({len(statements)} statement(s))",
+                extra={"run_id": self.run_id, "operation": "uc_replication"},
+            )
+            return _result("success", attempt=attempt)
+
+        error_msg = (
+            f"{object_type} replication failed after {max_attempts} attempts "
+            f"on {target_table}"
+        )
+        if last_exception:
+            error_msg += f" | Last error: {str(last_exception)}"
+        error_msg = _mark_unprotected(error_msg)
+        self.logger.error(
+            error_msg, extra={"run_id": self.run_id, "operation": "uc_replication"}
+        )
+        return _result("failed", error_msg, attempt=attempt)
+
     def _uc_replicate_volume_grants(
         self,
         schema_name: str,
@@ -3065,8 +3349,9 @@ class ReplicationProvider(BaseProvider):
                 self.logger.warning(
                     f"Target table {target_table} will be created WITHOUT the column "
                     f"masks / row filters defined on source {source_table}: "
-                    f"{'; '.join(removed_clauses)}. Set "
-                    f"strip_inline_masks_and_row_filters to false to keep them "
+                    f"{'; '.join(removed_clauses)}. Include column_mask / row_filter "
+                    f"in uc_object_types to apply them with ALTER TABLE, or set "
+                    f"strip_inline_masks_and_row_filters to false to keep them inline "
                     f"(the referenced functions must exist on target).",
                     extra={"run_id": self.run_id, "operation": "uc_replication"},
                 )

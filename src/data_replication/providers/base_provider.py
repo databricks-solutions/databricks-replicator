@@ -643,6 +643,8 @@ class BaseProvider(ABC):
                             UCObjectType.TABLE_COMMENT,
                             UCObjectType.MATERIALIZED_VIEW,
                             UCObjectType.STREAMING_TABLE,
+                            UCObjectType.COLUMN_MASK,
+                            UCObjectType.ROW_FILTER,
                         ]
                     )
                 )
@@ -1365,6 +1367,12 @@ class BaseProvider(ABC):
                     table_types_set.update(["materialized_view"])
                 if UCObjectType.STREAMING_TABLE in schema_config.uc_object_types:
                     table_types_set.update(["streaming_table"])
+                # Column masks / row filters only apply to managed / external tables.
+                if (
+                    UCObjectType.COLUMN_MASK in schema_config.uc_object_types
+                    or UCObjectType.ROW_FILTER in schema_config.uc_object_types
+                ):
+                    table_types_set.update(["managed", "external"])
                 # Grants and tags apply to every table kind — don't narrow the set.
                 if (
                     UCObjectType.TABLE_GRANT in schema_config.uc_object_types
