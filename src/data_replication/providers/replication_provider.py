@@ -32,6 +32,8 @@ from data_replication.function_ddl import (
 
 # from delta.tables import DeltaTable
 from ..config.models import (
+    PredictiveOptimizationCheck,
+    ReplicationConfig,
     RetryConfig,
     RunResult,
     SchemaConfig,
@@ -45,6 +47,7 @@ from ..constants import (
     ABAC_REPLAYABLE_POLICY_TYPES,
     DICT_FOR_CREATION_VOLUME,
     DICT_FOR_UPDATE_VOLUME,
+    PO_ENABLED_ON_TARGET,
 )
 from ..exceptions import ReplicationError, TableNotFoundError
 from ..sql_utils import (
@@ -434,6 +437,7 @@ class ReplicationProvider(BaseProvider):
         retry = table_config.retry
         actual_target_table = target_table
         source_table_type = None
+        po_details = None
 
         try:
             # Check if source table exists
@@ -520,6 +524,37 @@ class ReplicationProvider(BaseProvider):
                         f"enforce_schema=False",
                         extra={"run_id": self.run_id, "operation": "replication"},
                     )
+
+                # Predictive optimization on an existing target can rewrite its files
+                # and versions under the clone (see _check_target_predictive_optimization)
+                po_error, po_details = self._check_target_predictive_optimization(
+                    actual_target_table, replication_config
+                )
+                if po_error:
+                    po_end_time = datetime.now(timezone.utc)
+                    return [
+                        RunResult(
+                            operation_type="replication",
+                            catalog_name=target_catalog,
+                            schema_name=schema_name,
+                            object_name=table_name,
+                            object_type="table",
+                            status="failed",
+                            start_time=start_time.isoformat(),
+                            end_time=po_end_time.isoformat(),
+                            duration_seconds=(po_end_time - start_time).total_seconds(),
+                            error_message=po_error,
+                            details={
+                                "target_table": actual_target_table,
+                                "source_table": source_table,
+                                "table_type": source_table_type,
+                                "dlt_flag": dlt_flag,
+                                "dlt_type": dlt_type,
+                                "intermediate_catalog": replication_config.intermediate_catalog,
+                                "predictive_optimization": po_details,
+                            },
+                        )
+                    ]
 
             # Use custom retry decorator with logging
             @retry_with_logging(retry, self.logger)
@@ -634,6 +669,7 @@ class ReplicationProvider(BaseProvider):
                             "intermediate_catalog": replication_config.intermediate_catalog,
                             "step1_query": step1_query,
                             "step2_query": step2_query,
+                            "predictive_optimization": po_details,
                         },
                         attempt_number=attempt,
                         max_attempts=max_attempts,
@@ -672,6 +708,7 @@ class ReplicationProvider(BaseProvider):
                         "intermediate_catalog": replication_config.intermediate_catalog,
                         "step1_query": step1_query,
                         "step2_query": step2_query,
+                        "predictive_optimization": po_details,
                     },
                     attempt_number=attempt,
                     max_attempts=max_attempts,
@@ -1109,6 +1146,86 @@ class ReplicationProvider(BaseProvider):
                     max_attempts=max_attempts,
                 )
             ]
+
+    def _check_target_predictive_optimization(
+        self,
+        target_table: str,
+        replication_config: ReplicationConfig,
+    ) -> tuple[str | None, dict | None]:
+        """
+        Check predictive optimization (PO) on an existing target table before deep clone.
+
+        PO runs background OPTIMIZE / VACUUM, which rewrites the target's files and Delta
+        versions underneath the clone. The effective flag is read from the target workspace
+        (resolved through catalog -> schema -> table inheritance). Only a confirmed ENABLE on
+        a MANAGED target is acted on. Any other case, including an API error, fails open:
+        replication continues and a debug message is logged.
+
+        Args:
+            target_table: Existing target table (backtick-quoted full name)
+            replication_config: Effective replication config for the table
+        Returns:
+            (error_message, details). error_message is set only when the table must be
+            skipped (predictive_optimization_check=fail). details is recorded in the
+            RunResult, or None when the check is off.
+        """
+        mode = (
+            replication_config.predictive_optimization_check
+            or PredictiveOptimizationCheck.OFF
+        )
+        if mode == PredictiveOptimizationCheck.OFF:
+            return None, None
+
+        log_extra = {"run_id": self.run_id, "operation": "replication"}
+        details: dict = {"check": mode.value}
+        try:
+            po = self.target_dbops.get_table_predictive_optimization(target_table)
+        except Exception as e:
+            self.logger.debug(
+                f"Could not read predictive optimization for target {target_table}, "
+                f"continuing: {e}",
+                extra=log_extra,
+            )
+            return None, {**details, "action": "none", "error": str(e)}
+
+        details.update(
+            table_type=po["table_type"],
+            effective_flag=po["effective_flag"],
+            inherited_from_name=po["inherited_from_name"],
+            inherited_from_type=po["inherited_from_type"],
+        )
+        if po["table_type"] != "MANAGED" or po["effective_flag"] != "ENABLE":
+            details["action"] = "none"
+            self.logger.debug(
+                f"Predictive optimization check on {target_table}: table_type="
+                f"{po['table_type']}, effective_flag={po['effective_flag']}; no action",
+                extra=log_extra,
+            )
+            return None, details
+
+        message = f"Predictive optimization is ENABLED on existing target table {target_table}"
+        if po["inherited_from_name"]:
+            message += (
+                f" (inherited from {po['inherited_from_type'] or 'parent'} "
+                f"{po['inherited_from_name']})"
+            )
+        if mode == PredictiveOptimizationCheck.FAIL:
+            details["action"] = "blocked"
+            error = (
+                f"{PO_ENABLED_ON_TARGET}: {message}. Skipping table to avoid background "
+                "OPTIMIZE/VACUUM conflicts with deep clone. Disable predictive optimization "
+                "on the target or set predictive_optimization_check to warn."
+            )
+            self.logger.error(error, extra=log_extra)
+            return error, details
+
+        details["action"] = "warned"
+        self.logger.warning(
+            f"{message}; background OPTIMIZE/VACUUM may conflict with deep clone. "
+            "Continuing because predictive_optimization_check=warn.",
+            extra=log_extra,
+        )
+        return None, details
 
     def _replicate_via_intermediate(
         self,

@@ -105,6 +105,10 @@ DICT_FOR_UPDATE_VOLUME = {
 
 SKIP_PROCESSED_TABLES = True
 
+# RunResult error code for a table skipped because predictive optimization is
+# ENABLED on the existing managed target table (predictive_optimization_check=fail).
+PO_ENABLED_ON_TARGET = "PO_ENABLED_ON_TARGET"
+
 # Table properties that are derived by the Delta engine and cannot (or should
 # not) be replayed in a CREATE statement. Matching is case-insensitive. Entries
 # ending in "*" match any key with that prefix.
