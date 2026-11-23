@@ -561,6 +561,38 @@ class DatabricksOperations:
         except NotFound:
             return None
 
+    def get_table_predictive_optimization(self, table_name: str) -> dict:
+        """
+        Read a table's type and its effective predictive optimization (PO) flag.
+
+        The effective flag is resolved server-side through catalog -> schema -> table
+        inheritance, so a single tables.get call is enough. Raises NotFound if the
+        table does not exist.
+
+        Args:
+            table_name: Full table name (catalog.schema.table)
+        Returns:
+            Dictionary with keys table_type (e.g. "MANAGED"), effective_flag
+            ("ENABLE" / "DISABLE" / "INHERIT" or None), inherited_from_name and
+            inherited_from_type (None when the flag is not inherited).
+        """
+        if self.workspace_client is None:
+            raise ValueError(
+                "A WorkspaceClient is required to read predictive optimization"
+            )
+        table = self.workspace_client.tables.get(full_name=table_name.replace("`", ""))
+        flag = table.effective_predictive_optimization_flag
+        return {
+            "table_type": table.table_type.value if table.table_type else None,
+            "effective_flag": flag.value.value if flag and flag.value else None,
+            "inherited_from_name": flag.inherited_from_name if flag else None,
+            "inherited_from_type": (
+                flag.inherited_from_type.value
+                if flag and flag.inherited_from_type
+                else None
+            ),
+        }
+
     def drop_table_if_exists(self, table_name: str) -> None:
         """
         Drop table if it exists.

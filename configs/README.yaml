@@ -162,6 +162,14 @@ replication_config:
   # Optional: whether to replicate predictive optimization setting during UC catalog, schema and table replication.
   # default is false to disable PO at target to enable consistent incremental deep clone. Setting to true will replicate PO settings from source to target.
   replicate_enable_predictive_optimization: false
+  # Optional: what to do when predictive optimization (PO) is ENABLED on an existing managed target table before deep clone. default is off (the check costs one tables.get call per existing target table).
+  # Reads the target table's effective PO flag (resolved through catalog -> schema -> table inheritance). Only a confirmed ENABLE on a MANAGED target is acted on;
+  # missing targets, non-managed targets and unreadable flags always continue (debug log only).
+  #   off:  no check.
+  #   warn: log a warning and record the check in the table's RunResult details (predictive_optimization); the table is still cloned.
+  #   fail: skip the table with a failed RunResult, error_message starting PO_ENABLED_ON_TARGET.
+  # See docs/config_features.md (Predictive Optimization Check).
+  predictive_optimization_check: off
   # Optional: whether to create or replace table during UC table replication. default is false to use create table if not exists.
   create_or_replace_table: false
   # Optional: whether to create or replace view during UC view replication. default is true to use create or replace view.
