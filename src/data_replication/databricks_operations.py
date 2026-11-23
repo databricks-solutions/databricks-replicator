@@ -35,9 +35,10 @@ from data_replication.constants import (
     DELTA_CLONE_SOURCE_PARAM,
     DELTA_CLONE_SOURCE_VERSION_PARAM,
     DELTA_DATA_CHANGE_OPERATIONS,
+    DELTA_HISTORY_LOOKBACK_COMMITS,
 )
 from data_replication.exceptions import TableNotFoundError
-from data_replication.sql_utils import quote_string, quote_table_name
+from data_replication.sql_utils import quote_table_name
 from data_replication.utils import (
     get_spark_current_user,
     get_spark_workspace_url,
@@ -552,45 +553,49 @@ class DatabricksOperations:
 
     def get_latest_clone_commit(self, table_name: str) -> Optional[dict]:
         """
-        Return the most recent CLONE commit in a table's Delta history.
+        Return the most recent CLONE commit among a table's last
+        DELTA_HISTORY_LOOKBACK_COMMITS commits.
+
+        One bounded DESCRIBE HISTORY read serves both questions reconciliation
+        asks: which clone produced the table, and whether data was written after
+        it. The window keeps the cost flat for tables with long histories; a
+        clone older than the window is reported as not found.
 
         Args:
             table_name: Full table name (catalog.schema.table)
 
         Returns:
-            None when the history has no CLONE commit, otherwise a dict with
+            None when the window has no CLONE commit, otherwise a dict with
             ``target_version`` (the version the clone created), ``source_table``
-            (the table Delta recorded as the clone source) and ``source_version``
-            (the source version it read; None when Delta did not record one).
+            (the table Delta recorded as the clone source), ``source_version``
+            (the source version it read; None when Delta did not record one) and
+            ``data_writes_after`` (True if a data-changing commit, see
+            DELTA_DATA_CHANGE_OPERATIONS, came after the clone).
         """
         rows = self.spark.sql(
-            f"SELECT version, operationParameters FROM (DESCRIBE HISTORY {quote_table_name(table_name)}) "
-            f"WHERE operation = {quote_string(DELTA_CLONE_OPERATION)} "
-            "ORDER BY version DESC LIMIT 1"
+            "SELECT version, operation, operationParameters FROM "
+            f"(DESCRIBE HISTORY {quote_table_name(table_name)} "
+            f"LIMIT {int(DELTA_HISTORY_LOOKBACK_COMMITS)})"
         ).collect()
-        if not rows:
+        clones = [r for r in rows if r["operation"] == DELTA_CLONE_OPERATION]
+        if not clones:
             return None
-        params = rows[0]["operationParameters"] or {}
+        clone = max(clones, key=lambda r: int(r["version"]))
+        clone_version = int(clone["version"])
+        params = clone["operationParameters"] or {}
         source_version = params.get(DELTA_CLONE_SOURCE_VERSION_PARAM)
         return {
-            "target_version": int(rows[0]["version"]),
+            "target_version": clone_version,
             "source_table": params.get(DELTA_CLONE_SOURCE_PARAM),
             "source_version": (
                 int(source_version) if source_version is not None else None
             ),
+            "data_writes_after": any(
+                int(r["version"]) > clone_version
+                and r["operation"] in DELTA_DATA_CHANGE_OPERATIONS
+                for r in rows
+            ),
         }
-
-    def has_data_writes_after(self, table_name: str, version: int) -> bool:
-        """
-        Return True if a data-changing commit (see DELTA_DATA_CHANGE_OPERATIONS)
-        was made to the table after the given version.
-        """
-        operations = ", ".join(quote_string(op) for op in DELTA_DATA_CHANGE_OPERATIONS)
-        rows = self.spark.sql(
-            f"SELECT COUNT(*) AS n FROM (DESCRIBE HISTORY {quote_table_name(table_name)}) "
-            f"WHERE version > {int(version)} AND operation IN ({operations})"
-        ).collect()
-        return rows[0]["n"] > 0
 
     def get_time_travel_error(self, table_name: str, version: int) -> Optional[str]:
         """

@@ -135,6 +135,12 @@ DELTA_CLONE_OPERATION = "CLONE"
 DELTA_CLONE_SOURCE_PARAM = "source"
 DELTA_CLONE_SOURCE_VERSION_PARAM = "sourceVersion"
 
+# How many recent commits the clone-version lookup reads. DESCRIBE HISTORY cost
+# grows with history length; bounding it keeps the lookup near constant. The
+# window must cover the commits written after the clone (comments, properties,
+# maintenance), otherwise the clone is not found and reconciliation runs live.
+DELTA_HISTORY_LOOKBACK_COMMITS = 50
+
 # Commits that change table data. Metadata-only commits (properties, comments,
 # tags) are deliberately absent: replication produces those after the clone.
 DELTA_DATA_CHANGE_OPERATIONS: Tuple[str, ...] = (

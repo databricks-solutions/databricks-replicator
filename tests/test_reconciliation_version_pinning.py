@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from data_replication.config.models import ReconciliationConfig
+from data_replication.constants import DELTA_HISTORY_LOOKBACK_COMMITS
 from tests.test_reconciliation_provider import (
     FakeSpark,
     _provider,
@@ -22,7 +23,12 @@ from tests.test_reconciliation_provider import (
 
 SRC = "src_cat.sales.orders"
 TGT = "tgt_cat.sales.orders"
-CLONE = {"target_version": 4, "source_table": SRC, "source_version": 7}
+CLONE = {
+    "target_version": 4,
+    "source_table": SRC,
+    "source_version": 7,
+    "data_writes_after": False,
+}
 
 
 def _pinned_table(**recon_kw):
@@ -58,8 +64,9 @@ class SourceWritesSpark(FakeSpark):
 
 def _configure_clone(p, clone=CLONE, writes_after=False, time_travel_error=None):
     """Stub the target dbops as if the table was produced by a deep clone."""
-    p.db_ops.get_latest_clone_commit.return_value = clone
-    p.db_ops.has_data_writes_after.return_value = writes_after
+    p.db_ops.get_latest_clone_commit.return_value = (
+        None if clone is None else {**clone, "data_writes_after": writes_after}
+    )
     p.db_ops.get_time_travel_error.side_effect = time_travel_error or (
         lambda table, version: None
     )
@@ -217,9 +224,15 @@ class TestFallbacksToLive:
         _configure_clone(p, clone=None)
         [res] = p._reconcile_table(_schema(), _pinned_table())
         assert res.status == "success"
-        self._assert_live(res, "no CLONE commit in target history", spark)
+        self._assert_live(
+            res,
+            f"no CLONE commit in the last {DELTA_HISTORY_LOOKBACK_COMMITS} "
+            "commits of target history",
+            spark,
+        )
         p.logger.info.assert_any_call(
-            f"Reconciling live tables for {SRC} vs {TGT}: no CLONE commit in target history",
+            f"Reconciling live tables for {SRC} vs {TGT}: no CLONE commit in the "
+            f"last {DELTA_HISTORY_LOOKBACK_COMMITS} commits of target history",
             extra={"run_id": "run-1", "operation": "reconciliation"},
         )
 
@@ -254,7 +267,7 @@ class TestFallbacksToLive:
         _configure_clone(p, writes_after=True)
         [res] = p._reconcile_table(_schema(), _pinned_table())
         self._assert_live(res, "target has data writes after the CLONE commit", spark)
-        p.db_ops.has_data_writes_after.assert_called_once_with(TGT, 4)
+        p.db_ops.get_latest_clone_commit.assert_called_once_with(TGT)
 
     @pytest.mark.parametrize("side", ["source", "target"])
     def test_time_travel_failure(self, side):

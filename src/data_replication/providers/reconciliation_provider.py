@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from data_replication.databricks_operations import DatabricksOperations
 
 from ..config.models import RunResult, SchemaConfig, TableConfig
-from ..constants import NON_PINNABLE_TABLE_TYPES
+from ..constants import DELTA_HISTORY_LOOKBACK_COMMITS, NON_PINNABLE_TABLE_TYPES
 from ..exceptions import ReconciliationError, TableNotFoundError
 from ..sql_utils import normalize_table_name
 from ..utils import (
@@ -147,7 +147,10 @@ class ReconciliationProvider(BaseProvider):
 
         clone = self.db_ops.get_latest_clone_commit(target_table)
         if clone is None:
-            return None, "no CLONE commit in target history"
+            return None, (
+                "no CLONE commit in the last "
+                f"{DELTA_HISTORY_LOOKBACK_COMMITS} commits of target history"
+            )
         if clone["source_version"] is None or not clone["source_table"]:
             return None, "latest CLONE commit does not record its source version"
         # Only a clone that read the reconciliation source is pinnable. A clone
@@ -163,7 +166,7 @@ class ReconciliationProvider(BaseProvider):
         # Replication is the only writer of the target, so the target equals its
         # clone. A data write after the clone came from elsewhere (e.g. a streaming
         # or autoloader table), and pinning would hide it.
-        if self.db_ops.has_data_writes_after(target_table, clone["target_version"]):
+        if clone["data_writes_after"]:
             return None, "target has data writes after the CLONE commit"
 
         pinned = {

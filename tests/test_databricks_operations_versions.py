@@ -9,7 +9,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from data_replication.constants import DELTA_DATA_CHANGE_OPERATIONS
+from data_replication.constants import (
+    DELTA_DATA_CHANGE_OPERATIONS,
+    DELTA_HISTORY_LOOKBACK_COMMITS,
+)
 from data_replication.databricks_operations import DatabricksOperations
 from data_replication.sql_utils import normalize_table_name, quote_table_name
 
@@ -39,8 +42,20 @@ class TestQuoting:
         assert normalize_table_name("`SRC`.sales.`Orders`") == "src.sales.orders"
 
 
+def _commit(version, operation, params=None):
+    return {"version": version, "operation": operation, "operationParameters": params}
+
+
+CLONE_PARAMS = {"source": "src.sch.t", "sourceVersion": "12", "isShallow": "false"}
+
+
 class TestGetLatestCloneCommit:
     def test_none_when_no_clone_commit(self, ops):
+        o, spark = ops
+        _rows(spark, [_commit(1, "WRITE"), _commit(0, "CREATE TABLE")])
+        assert o.get_latest_clone_commit("cat.sch.t") is None
+
+    def test_none_when_history_empty(self, ops):
         o, spark = ops
         _rows(spark, [])
         assert o.get_latest_clone_commit("cat.sch.t") is None
@@ -49,54 +64,69 @@ class TestGetLatestCloneCommit:
         o, spark = ops
         _rows(
             spark,
-            [
-                {
-                    "version": 5,
-                    "operationParameters": {
-                        "source": "src.sch.t",
-                        "sourceVersion": "12",
-                        "isShallow": "false",
-                    },
-                }
-            ],
+            [_commit(6, "SET TBLPROPERTIES"), _commit(5, "CLONE", CLONE_PARAMS)],
         )
         assert o.get_latest_clone_commit("cat.sch.t") == {
             "target_version": 5,
             "source_table": "src.sch.t",
             "source_version": 12,
+            "data_writes_after": False,
         }
+
+    def test_picks_most_recent_clone(self, ops):
+        o, spark = ops
+        old = {"source": "src.sch.t", "sourceVersion": "3"}
+        _rows(
+            spark,
+            [_commit(2, "CLONE", old), _commit(9, "CLONE", CLONE_PARAMS)],
+        )
+        clone = o.get_latest_clone_commit("cat.sch.t")
+        assert clone["target_version"] == 9
+        assert clone["source_version"] == 12
 
     def test_missing_source_version_is_none(self, ops):
         o, spark = ops
-        _rows(spark, [{"version": 0, "operationParameters": {"source": "s.t.u"}}])
+        _rows(spark, [_commit(0, "CLONE", {"source": "s.t.u"})])
         clone = o.get_latest_clone_commit("cat.sch.t")
         assert clone["source_version"] is None
         assert clone["source_table"] == "s.t.u"
 
-    def test_query_reads_clone_operation_from_quoted_history(self, ops):
+    def test_missing_operation_parameters(self, ops):
+        o, spark = ops
+        _rows(spark, [_commit(0, "CLONE", None)])
+        clone = o.get_latest_clone_commit("cat.sch.t")
+        assert clone["source_table"] is None
+        assert clone["source_version"] is None
+
+    @pytest.mark.parametrize("op", DELTA_DATA_CHANGE_OPERATIONS)
+    def test_data_write_after_clone_is_flagged(self, ops, op):
+        o, spark = ops
+        _rows(spark, [_commit(5, op), _commit(4, "CLONE", CLONE_PARAMS)])
+        assert o.get_latest_clone_commit("cat.sch.t")["data_writes_after"] is True
+
+    def test_writes_before_clone_and_metadata_after_are_ignored(self, ops):
+        o, spark = ops
+        _rows(
+            spark,
+            [
+                _commit(6, "OPTIMIZE"),
+                _commit(5, "SET TBLPROPERTIES"),
+                _commit(4, "CLONE", CLONE_PARAMS),
+                _commit(3, "WRITE"),
+            ],
+        )
+        assert o.get_latest_clone_commit("cat.sch.t")["data_writes_after"] is False
+
+    def test_single_bounded_history_query(self, ops):
         o, spark = ops
         _rows(spark, [])
         o.get_latest_clone_commit("cat.sch.t")
+        assert spark.sql.call_count == 1
         query = spark.sql.call_args.args[0]
-        assert "DESCRIBE HISTORY `cat`.`sch`.`t`" in query
-        assert "operation = 'CLONE'" in query
-        assert "ORDER BY version DESC LIMIT 1" in query
-
-
-class TestHasDataWritesAfter:
-    def test_true_when_a_data_commit_follows(self, ops):
-        o, spark = ops
-        _rows(spark, [{"n": 2}])
-        assert o.has_data_writes_after("cat.sch.t", 4) is True
-        query = spark.sql.call_args.args[0]
-        assert "version > 4" in query
-        for op in DELTA_DATA_CHANGE_OPERATIONS:
-            assert f"'{op}'" in query
-
-    def test_false_when_none(self, ops):
-        o, spark = ops
-        _rows(spark, [{"n": 0}])
-        assert o.has_data_writes_after("cat.sch.t", 4) is False
+        assert (
+            f"DESCRIBE HISTORY `cat`.`sch`.`t` LIMIT {DELTA_HISTORY_LOOKBACK_COMMITS}"
+            in query
+        )
 
 
 class TestGetTimeTravelError:
