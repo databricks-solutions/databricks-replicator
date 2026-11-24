@@ -8,7 +8,7 @@ streaming tables, materialized views, and intermediate catalogs.
 import re
 from datetime import datetime, timezone
 from time import sleep
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from databricks.sdk.service.catalog import VolumeType
 from databricks.sdk.service.sql import (
@@ -659,6 +659,11 @@ class ReplicationProvider(BaseProvider):
                             "intermediate_catalog": replication_config.intermediate_catalog,
                             "step1_query": step1_query,
                             "step2_query": step2_query,
+                            "replicated_versions": (
+                                None
+                                if is_external
+                                else self._get_replicated_versions(actual_target_table)
+                            ),
                             "predictive_optimization": po_details,
                         },
                         attempt_number=attempt,
@@ -745,6 +750,30 @@ class ReplicationProvider(BaseProvider):
                     max_attempts=max_attempts,
                 )
             ]
+
+    def _get_replicated_versions(self, target_table: str) -> Optional[dict]:
+        """Source and target versions of the deep clone that produced ``target_table``.
+
+        Read from the target's most recent CLONE commit (the same lookup
+        reconciliation uses). Returns None when no CLONE commit can be read, so a
+        history problem never fails an otherwise successful replication.
+        """
+        try:
+            clone = self.db_ops.get_latest_clone_commit(target_table)
+        except Exception as e:
+            self.logger.warning(
+                f"Could not read clone versions for {target_table}: {e}",
+                extra={"run_id": self.run_id, "operation": "replication"},
+            )
+            return None
+        if clone is None:
+            return None
+        return {
+            "target_table": target_table,
+            "target_version": clone["target_version"],
+            "source_table": clone["source_table"],
+            "source_version": clone["source_version"],
+        }
 
     def _create_file_ingestion_logging_table(self, volume_replication_config) -> None:
         """Create file ingestion logging table if not exists."""

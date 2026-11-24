@@ -30,7 +30,15 @@ from data_replication.audit.logger import DataReplicationLogger
 from data_replication.config.models import (
     RetryConfig,
 )
+from data_replication.constants import (
+    DELTA_CLONE_OPERATION,
+    DELTA_CLONE_SOURCE_PARAM,
+    DELTA_CLONE_SOURCE_VERSION_PARAM,
+    DELTA_DATA_CHANGE_OPERATIONS,
+    DELTA_HISTORY_LOOKBACK_COMMITS,
+)
 from data_replication.exceptions import TableNotFoundError
+from data_replication.sql_utils import quote_table_name
 from data_replication.utils import (
     get_spark_current_user,
     get_spark_workspace_url,
@@ -543,6 +551,70 @@ class DatabricksOperations:
 
         raise TableNotFoundError(f"Table {table_name} does not exist")
 
+    def get_latest_clone_commit(self, table_name: str) -> Optional[dict]:
+        """
+        Return the most recent CLONE commit among a table's last
+        DELTA_HISTORY_LOOKBACK_COMMITS commits.
+
+        One bounded DESCRIBE HISTORY read serves both questions reconciliation
+        asks: which clone produced the table, and whether data was written after
+        it. The window keeps the cost flat for tables with long histories; a
+        clone older than the window is reported as not found.
+
+        Args:
+            table_name: Full table name (catalog.schema.table)
+
+        Returns:
+            None when the window has no CLONE commit, otherwise a dict with
+            ``target_version`` (the version the clone created), ``source_table``
+            (the table Delta recorded as the clone source), ``source_version``
+            (the source version it read; None when Delta did not record one) and
+            ``data_writes_after`` (True if a data-changing commit, see
+            DELTA_DATA_CHANGE_OPERATIONS, came after the clone).
+        """
+        rows = self.spark.sql(
+            "SELECT version, operation, operationParameters FROM "
+            f"(DESCRIBE HISTORY {quote_table_name(table_name)} "
+            f"LIMIT {int(DELTA_HISTORY_LOOKBACK_COMMITS)})"
+        ).collect()
+        clones = [r for r in rows if r["operation"] == DELTA_CLONE_OPERATION]
+        if not clones:
+            return None
+        clone = max(clones, key=lambda r: int(r["version"]))
+        clone_version = int(clone["version"])
+        params = clone["operationParameters"] or {}
+        source_version = params.get(DELTA_CLONE_SOURCE_VERSION_PARAM)
+        return {
+            "target_version": clone_version,
+            "source_table": params.get(DELTA_CLONE_SOURCE_PARAM),
+            "source_version": (
+                int(source_version) if source_version is not None else None
+            ),
+            "data_writes_after": any(
+                int(r["version"]) > clone_version
+                and r["operation"] in DELTA_DATA_CHANGE_OPERATIONS
+                for r in rows
+            ),
+        }
+
+    def get_time_travel_error(self, table_name: str, version: int) -> Optional[str]:
+        """
+        Check that a table can be read at a version.
+
+        Returns:
+            None when ``VERSION AS OF`` works, otherwise the error message
+            (e.g. the version was vacuumed or history sharing is not enabled).
+        """
+        try:
+            self.spark.sql(
+                f"SELECT * FROM {quote_table_name(table_name)} "
+                f"VERSION AS OF {int(version)} LIMIT 1"
+            ).collect()
+            return None
+        except Exception as e:
+            lines = str(e).strip().splitlines()
+            return lines[0] if lines else repr(e)
+
     def get_table_predictive_optimization(self, table_name: str) -> dict:
         """
         Read a table's type and its effective predictive optimization (PO) flag.
@@ -724,20 +796,45 @@ class DatabricksOperations:
             f"Could not find internal table for {table_name} with pipeline ID {pipeline_id}"
         )
 
-    def get_common_fields(self, source_table: str, target_table: str) -> List[str]:
+    def get_common_fields(
+        self,
+        source_table: str,
+        target_table: str,
+        source_version: Optional[int] = None,
+        target_version: Optional[int] = None,
+    ) -> List[str]:
         """
         Get common fields between source and target tables.
 
         Args:
             source_table: Full source table name (catalog.schema.table)
             target_table: Full target table name (catalog.schema.table)
+            source_version: Read the source schema at this Delta version
+            target_version: Read the target schema at this Delta version
 
         Returns:
             List of common field names
         """
-        source_fields = set(self.get_table_fields(source_table))
-        target_fields = set(self.get_table_fields(target_table))
+        if source_version is None:
+            source_fields = set(self.get_table_fields(source_table))
+        else:
+            source_fields = set(
+                self._get_fields_at_version(source_table, source_version)
+            )
+        if target_version is None:
+            target_fields = set(self.get_table_fields(target_table))
+        else:
+            target_fields = set(
+                self._get_fields_at_version(target_table, target_version)
+            )
         return list(source_fields & target_fields)
+
+    def _get_fields_at_version(self, table_name: str, version: int) -> List[str]:
+        """Field names of a table as of a Delta version (no rows read)."""
+        return self.spark.sql(
+            f"SELECT * FROM {quote_table_name(table_name)} "
+            f"VERSION AS OF {int(version)} LIMIT 0"
+        ).columns
 
     def get_table_fields(self, table_name: str) -> List[str]:
         """

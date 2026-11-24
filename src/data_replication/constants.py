@@ -127,3 +127,39 @@ UNREPLAYABLE_TBLPROPERTIES: Tuple[str, ...] = (
     "delta.lastCommitTimestamp",
     "delta.lastUpdateVersion",
 )
+
+# Delta history of a deep clone: the operation name and the operationParameters
+# keys (map<string, string>) that record the source table and the source version
+# the clone read.
+DELTA_CLONE_OPERATION = "CLONE"
+DELTA_CLONE_SOURCE_PARAM = "source"
+DELTA_CLONE_SOURCE_VERSION_PARAM = "sourceVersion"
+
+# How many recent commits the clone-version lookup reads. DESCRIBE HISTORY cost
+# grows with history length; bounding it keeps the lookup near constant. The
+# window must cover the commits written after the clone (comments, properties,
+# maintenance), otherwise the clone is not found and reconciliation runs live.
+DELTA_HISTORY_LOOKBACK_COMMITS = 50
+
+# Commits that change table data. Metadata-only commits (properties, comments,
+# tags) are deliberately absent: replication produces those after the clone.
+DELTA_DATA_CHANGE_OPERATIONS: Tuple[str, ...] = (
+    "WRITE",
+    "STREAMING UPDATE",
+    "MERGE",
+    "UPDATE",
+    "DELETE",
+    "TRUNCATE",
+    "COPY INTO",
+    "RESTORE",
+    "REPLACE TABLE AS SELECT",
+    "CREATE OR REPLACE TABLE AS SELECT",
+)
+
+# Table types whose replicated state cannot be pinned to a clone version: DLT
+# outputs are fed by a backing table and external tables are cloned by location.
+NON_PINNABLE_TABLE_TYPES: Tuple[str, ...] = (
+    "external",
+    "streaming_table",
+    "materialized_view",
+)
